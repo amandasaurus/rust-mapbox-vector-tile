@@ -1,0 +1,10 @@
+[package]
+name = "mapbox_vector_tile"
+version = "0.1.0"
+authors = ["Rory McCann <rory@technomancy.org>"]
+
+[dependencies]
+geo = "0.4.7"
+protobuf = "*"
+
+flate2 = { version = "0.2", features = ["zlib"] }
