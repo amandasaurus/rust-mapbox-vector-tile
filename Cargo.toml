@@ -8,3 +8,7 @@ geo = "0.4.7"
 protobuf = "*"
 
 flate2 = { version = "0.2", features = ["zlib"] }
+
+slippy-map-tiles = "*"
+
+geojson = "*"
