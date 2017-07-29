@@ -6,9 +6,9 @@ authors = ["Rory McCann <rory@technomancy.org>"]
 [dependencies]
 geo = "0.4.7"
 protobuf = "*"
-
 flate2 = { version = "0.2", features = ["zlib"] }
-
 slippy-map-tiles = "*"
-
+serde = "*"
+serde_derive = "*"
+serde_json = "*"
 geojson = "*"

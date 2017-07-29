@@ -4,6 +4,12 @@ extern crate protobuf;
 extern crate flate2;
 extern crate slippy_map_tiles;
 
+#[macro_use]
+extern crate serde_derive;
+
+extern crate serde;
+extern crate serde_json;
+
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::Cursor;
@@ -11,11 +17,14 @@ use protobuf::Message;
 
 use std::collections::{HashMap, HashSet, BTreeMap};
 use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon};
-use flate2::FlateReadExt;
+use flate2::{FlateReadExt, FlateWriteExt, Compression};
+
+use serde::ser::{Serialize, Serializer, SerializeMap};
+
 
 mod vector_tile;
 
-#[derive(Debug)]
+#[derive(Debug,PartialEq,Serialize)]
 pub struct Properties(pub HashMap<String, Value>);
 
 //impl From<HashMap<String, Value>> for Properties {
@@ -46,11 +55,24 @@ impl Properties {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug,PartialEq)]
 pub struct Feature {
     // The geometry is really integers
     pub geometry: Geometry<f32>,
     pub properties: Properties,
+}
+
+impl Serialize for Feature {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where S: Serializer
+    {
+        let mut map = serializer.serialize_map(Some(2)).unwrap();
+        map.serialize_entry("properties", &self.properties).unwrap();
+        map.serialize_entry("geometry", &false).unwrap();
+        
+        map.end()
+
+    }
 }
 
 impl Feature {
@@ -96,7 +118,7 @@ impl From<Geometry<f32>> for Feature {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug,PartialEq,Serialize)]
 pub struct Layer {
     name: String,
     pub features: Vec<Feature>,
@@ -206,7 +228,7 @@ fn make_index<'a, T: Ord>(input: &[&'a T]) -> (Vec<&'a T>, BTreeMap<&'a T, u32>)
 }
 
 
-#[derive(Debug)]
+#[derive(Debug,PartialEq,Serialize)]
 pub struct Tile {
     pub layers: Vec<Layer>,
 }
@@ -227,20 +249,22 @@ impl Tile {
         let mut file = File::open(filename).unwrap();
         let mut contents: Vec<u8> = Vec::new();
         file.read_to_end(&mut contents).unwrap();
-
         // FIXME if the gzip file is empty then return something sensible
-        
-        // unzip
-        let mut bytes: Vec<u8> = Vec::with_capacity(contents.len());
-        let cursor = Cursor::new(contents);
+
+        Tile::from_compressed_bytes(&contents)
+    }
+
+    pub fn from_compressed_bytes(bytes: &[u8]) -> Tile {
+        let cursor = Cursor::new(bytes);
         let mut contents: Vec<u8> = Vec::new();
         cursor.gz_decode().unwrap().read_to_end(&mut contents).unwrap();
 
-        let mut tile: vector_tile::Tile = protobuf::parse_from_bytes(&contents).unwrap();
+        Tile::from_uncompressed_bytes(&contents)
+    }
 
+    pub fn from_uncompressed_bytes(bytes: &[u8]) -> Tile {
+        let mut tile: vector_tile::Tile = protobuf::parse_from_bytes(&bytes).unwrap();
         pbftile_to_tile(tile)
-        //tile.into()
-
     }
 
     pub fn set_locations(&mut self, geometry_tile: &slippy_map_tiles::Tile) {
@@ -255,6 +279,29 @@ impl Tile {
         layer.add_feature(f);
     }
 
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut res = Vec::new();
+        self.write_to(&mut res);
+        res
+    }
+
+    pub fn to_compressed_bytes(&self) -> Vec<u8> {
+        let bytes = self.to_bytes();
+        let mut compressor = Vec::with_capacity(bytes.len()/2).gz_encode(Compression::Default);
+        compressor.write(&bytes).unwrap();
+        compressor.flush().unwrap();
+        let new_bytes = compressor.finish().unwrap();
+
+        new_bytes
+    }
+
+    pub fn write_to<W: std::io::Write>(&self, writer: &mut W)  {
+        let converted: vector_tile::Tile = self.into();
+        let mut cos = protobuf::CodedOutputStream::new(writer);
+        converted.write_to(&mut cos).unwrap();
+        cos.flush().unwrap();
+    }
+
     pub fn write_to_file(&self, filename: &str)  {
         let converted: vector_tile::Tile = self.into();
         let mut file = File::create(filename).unwrap();
@@ -262,6 +309,10 @@ impl Tile {
         converted.write_to(&mut cos).unwrap();
         cos.flush().unwrap();
         //converted.write_to_bytes().unwrap()
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(&self).unwrap()
     }
 
 }
@@ -278,7 +329,7 @@ impl<'a> From<&'a Tile> for vector_tile::Tile {
     }
 }
 
-#[derive(Debug,Clone,PartialEq,PartialOrd)]
+#[derive(Debug,Clone,PartialEq,PartialOrd,Serialize)]
 pub enum Value {
     String(String),
     Float(f32),
