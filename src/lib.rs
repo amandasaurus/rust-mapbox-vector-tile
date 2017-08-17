@@ -11,12 +11,15 @@ extern crate serde;
 extern crate serde_json;
 
 use std::fs::File;
+use std::io::BufWriter;
 use std::io::prelude::*;
 use std::io::Cursor;
 use protobuf::Message;
+use std::hash::{Hash, Hasher};
 
 use std::collections::{HashMap, HashSet, BTreeMap};
 use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon};
+use geo::orient::{Orient, Direction, WindingOrder};
 use flate2::{FlateReadExt, FlateWriteExt, Compression};
 
 use serde::ser::{Serialize, Serializer, SerializeMap};
@@ -24,7 +27,7 @@ use serde::ser::{Serialize, Serializer, SerializeMap};
 
 mod vector_tile;
 
-#[derive(Debug,PartialEq,Serialize)]
+#[derive(Debug,PartialEq,Serialize,Clone)]
 pub struct Properties(pub HashMap<String, Value>);
 
 //impl From<HashMap<String, Value>> for Properties {
@@ -55,10 +58,9 @@ impl Properties {
     }
 }
 
-#[derive(Debug,PartialEq)]
+#[derive(Debug,PartialEq,Clone)]
 pub struct Feature {
-    // The geometry is really integers
-    pub geometry: Geometry<f32>,
+    pub geometry: geo::Geometry<i32>,
     pub properties: Properties,
 }
 
@@ -76,22 +78,22 @@ impl Serialize for Feature {
 }
 
 impl Feature {
-    pub fn new(geometry: Geometry<f32>, properties: Properties) -> Self {
+    pub fn new(geometry: Geometry<i32>, properties: Properties) -> Self {
         Feature{ geometry: geometry, properties: properties }
     }
 
-    pub fn from_geometry(geometry: Geometry<f32>) -> Self {
+    pub fn from_geometry(geometry: Geometry<i32>) -> Self {
         Feature::new(geometry, Properties::new())
     }
 
-    pub fn get_point<'a>(&'a self) -> Option<Point<f32>> {
+    pub fn get_point<'a>(&'a self) -> Option<Point<i32>> {
         match self.geometry {
             Geometry::Point(p) => Some(p),
             _ => None,
         }
     }
 
-    pub fn translate_geometry(&mut self, x_func: &Fn(f32)->f32, y_func: &Fn(f32) -> f32) {
+    pub fn translate_geometry(&mut self, x_func: &Fn(i32)->i32, y_func: &Fn(i32) -> i32) {
         // FIXME why the back and forth and not just set it
         self.geometry = match self.geometry {
             Geometry::Point(mut p) => {
@@ -111,18 +113,18 @@ impl Feature {
 
 }
 
-impl From<Geometry<f32>> for Feature {
-    fn from(geom: Geometry<f32>) -> Feature {
+impl From<Geometry<i32>> for Feature {
+    fn from(geom: Geometry<i32>) -> Feature {
         Feature::from_geometry(geom)
     }
 }
 
 
-#[derive(Debug,PartialEq,Serialize)]
+#[derive(Debug,PartialEq,Serialize,Clone)]
 pub struct Layer {
-    name: String,
+    pub name: String,
     pub features: Vec<Feature>,
-    extent: u32,
+    pub extent: u32,
 }
 
 impl Layer {
@@ -135,16 +137,16 @@ impl Layer {
     }
 
     pub fn set_locations(&mut self, geometry_tile: &slippy_map_tiles::Tile) {
-        let extent = self.extent as f32;
-        let top = geometry_tile.top();
-        let bottom = geometry_tile.bottom();
-        let left = geometry_tile.left();
-        let right = geometry_tile.right();
+        let extent = self.extent as i32;
+        let top = geometry_tile.top() as i32;
+        let bottom = geometry_tile.bottom() as i32;
+        let left = geometry_tile.left() as i32;
+        let right = geometry_tile.right() as i32;
         let width = right - left;
         let height = bottom - top;
 
-        let x_func = |x: f32| { left + (x / extent) * width };
-        let y_func = |y: f32| { top + (y / extent) * height };
+        let x_func = |x: i32| { left + (x / extent) * width };
+        let y_func = |y: i32| { top + (y / extent) * height };
 
         for f in self.features.iter_mut() {
             f.translate_geometry(&x_func, &y_func);
@@ -205,6 +207,17 @@ impl<'a> From<&'a Layer> for vector_tile::Tile_Layer {
             let geom: DrawingCommands = f.geometry.clone().into();
             pbf_feature.set_geometry(geom.into());
 
+            pbf_feature.set_field_type(match f.geometry {
+                Geometry::Point(_) => vector_tile::Tile_GeomType::POINT,
+                Geometry::MultiPoint(_) => vector_tile::Tile_GeomType::POINT,
+                Geometry::LineString(_) => vector_tile::Tile_GeomType::LINESTRING,
+                Geometry::MultiLineString(_) => vector_tile::Tile_GeomType::LINESTRING,
+                Geometry::Polygon(_) => vector_tile::Tile_GeomType::POLYGON,
+                Geometry::MultiPolygon(_) => vector_tile::Tile_GeomType::POLYGON,
+                _ => vector_tile::Tile_GeomType::UNKNOWN,
+            });
+
+
             res.mut_features().push(pbf_feature);
         }
 
@@ -212,8 +225,8 @@ impl<'a> From<&'a Layer> for vector_tile::Tile_Layer {
     }
 }
 
-fn make_index<'a, T: Ord>(input: &[&'a T]) -> (Vec<&'a T>, BTreeMap<&'a T, u32>) {
-    let mut counter = BTreeMap::new();
+fn make_index<'a, T: Ord+Hash+Eq>(input: &[&'a T]) -> (Vec<&'a T>, HashMap<&'a T, u32>) {
+    let mut counter = HashMap::new();
     for key in input {
         let val = counter.entry(key).or_insert(0);
         *val += 1;
@@ -221,14 +234,14 @@ fn make_index<'a, T: Ord>(input: &[&'a T]) -> (Vec<&'a T>, BTreeMap<&'a T, u32>)
     let mut popular_items: Vec<_> = counter.into_iter().map(|(k, v)| (v, k)).collect();
     popular_items.sort();
     let popular_items = popular_items;
-    let number_for_key: BTreeMap<&T, u32> = popular_items.iter().enumerate().map(|(i, &(v, k))| (*k, i as u32)).collect();
+    let number_for_key: HashMap<&T, u32> = popular_items.iter().enumerate().map(|(i, &(v, k))| (*k, i as u32)).collect();
     let keys_in_order: Vec<&T> = popular_items.iter().map(|&(v, k)| *k).collect();
 
     (keys_in_order, number_for_key)
 }
 
 
-#[derive(Debug,PartialEq,Serialize)]
+#[derive(Debug,PartialEq,Serialize,Clone)]
 pub struct Tile {
     pub layers: Vec<Layer>,
 }
@@ -303,12 +316,8 @@ impl Tile {
     }
 
     pub fn write_to_file(&self, filename: &str)  {
-        let converted: vector_tile::Tile = self.into();
-        let mut file = File::create(filename).unwrap();
-        let mut cos = protobuf::CodedOutputStream::new(&mut file);
-        converted.write_to(&mut cos).unwrap();
-        cos.flush().unwrap();
-        //converted.write_to_bytes().unwrap()
+        let mut file = BufWriter::new(File::create(filename).unwrap());
+        file.write_all(&self.to_compressed_bytes()).unwrap();
     }
 
     pub fn to_json(&self) -> String {
@@ -372,6 +381,21 @@ impl Ord for Value {
         self.repr().cmp(&other.repr())
     }
 
+}
+
+impl Hash for Value {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            &Value::String(ref s) => s.hash(state),
+            &Value::Float(ref s) => self.repr().hash(state),
+            &Value::Double(ref s) => self.repr().hash(state),
+            &Value::Int(ref s) => s.hash(state),
+            &Value::UInt(ref s) => s.hash(state),
+            &Value::SInt(ref s) => s.hash(state),
+            &Value::Boolean(ref s) => s.hash(state),
+            &Value::Unknown => "Unknown".hash(state),
+        }
+    }
 }
 
 impl From<String> for Value { fn from(x: String) -> Value { Value::String(x) } }
@@ -450,14 +474,40 @@ fn pbflayer_to_layer(mut layer: vector_tile::Tile_Layer) -> Layer {
 }
 
 
-#[derive(Debug,Clone)]
+#[derive(Debug,Clone,PartialEq,Eq)]
 pub enum DrawingCommand {
     MoveTo(Vec<(i32, i32)>),
     LineTo(Vec<(i32, i32)>),
     ClosePath,
 }
 
-#[derive(Debug,Clone)]
+impl DrawingCommand {
+    fn is_moveto(&self) -> bool {
+        if let &DrawingCommand::MoveTo(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    fn is_lineto(&self) -> bool {
+        if let &DrawingCommand::LineTo(_) = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    fn is_closepath(&self) -> bool {
+        if let &DrawingCommand::ClosePath = self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Debug,Clone,PartialEq,Eq)]
 pub struct DrawingCommands(pub Vec<DrawingCommand>);
 
 impl<'a> From<&'a [u32]> for DrawingCommands {
@@ -505,198 +555,354 @@ impl<'a> From<&'a [u32]> for DrawingCommands {
     }
 }
 
-#[derive(Debug,PartialEq,Eq,Clone)]
-enum WindingOrder { Clockwise, AntiClockwise }
-
-/// Returns the winding order of the ring. presumes a valid ring
-fn winding_order(ring: &LineString<f32>) -> WindingOrder {
-    // FIXME can we use .windows here instead?
-    let res: f32 = (0..ring.0.len()-1).map(|i| ( ring.0[i].x()*ring.0[i+1].y()  - ring.0[i+1].x()*ring.0[i].y() ) ).sum();
-    if res < 0. {
-        WindingOrder::AntiClockwise
-    } else {
-        WindingOrder::Clockwise
+impl From<Vec<u32>> for DrawingCommands {
+    fn from(data: Vec<u32>) -> DrawingCommands {
+        data.as_slice().into()
     }
 }
 
+fn decode_geom(data: &[u32], geom_type: &vector_tile::Tile_GeomType) -> Geometry<i32> {
+    let cmds: DrawingCommands = data.into();
+    cmds.into()
+}
 
-fn decode_geom(data: &[u32], geom_type: &vector_tile::Tile_GeomType) -> Geometry<f32> {
+fn deduce_geom_type(cmds: &DrawingCommands) -> vector_tile::Tile_GeomType {
+    let cmds = &cmds.0;
 
-    let commands: DrawingCommands = data.into();
-    match *geom_type {
-        vector_tile::Tile_GeomType::POINT => {
-            // Specs define this, but maybe we should make this return a Result instead of an
-            // assertion
-            assert_eq!(commands.0.len(), 1);
-            match commands.0[0] {
-                DrawingCommand::MoveTo(ref points) => {
-                    if points.len() == 0 {
-                        unreachable!()
-                    } else if points.len() == 1 {
-                        Geometry::Point(Point::new(points[0].0 as f32, points[0].1 as f32))
-                    } else if points.len() > 1 {
-                        let mut cx = 0;
-                        let mut cy = 0;
-                        let mut new_points = Vec::with_capacity(points.len());
-                        for p in points.into_iter() {
-                            cx = cx + p.0;
-                            cy = cy + p.1;
-                            new_points.push(Point::new(cx as f32, cy as f32));
-                        }
-                        Geometry::MultiPoint(MultiPoint(new_points))
-                    } else {
-                        unreachable!();
-                    } 
-                }
-                _ => { unreachable!() },
-            }
-        },
-        vector_tile::Tile_GeomType::LINESTRING => {
-            let mut cx = 0;
-            let mut cy = 0;
-            assert_eq!(commands.0.len() % 2, 0);
-            let mut lines: Vec<LineString<f32>> = Vec::with_capacity(commands.0.len()/2);
-            for cmds in commands.0.chunks(2) {
-                assert_eq!(cmds.len(), 2);
+    // There are definitly ways for the input to be invalid where it should return UNKNOWN. e.g.
+    // vec![DrawingCommands::ClosePath] would be POLYGON, but that's not a valid polygon, so it
+    // should be UNKNOWN. But for valid DrawingCommands, it should be accurate.
 
-                let mut linestring_points = Vec::new();
-
-                if let DrawingCommand::MoveTo(ref points) = cmds[0] {
-                    assert_eq!(points.len(), 1);
-                    let (dx, dy) = points[0];
-                    cx += dx;
-                    cy += dy;
-                    linestring_points.push(Point::new(cx as f32, cy as f32));
-                } else {
-                    assert!(false);
-                }
-                if let DrawingCommand::LineTo(ref points) = cmds[1] {
-                    assert!(points.len() > 0);
-                    linestring_points.reserve(points.len());
-                    for &(dx, dy) in points.into_iter() {
-                        cx += dx;
-                        cy += dy;
-                        linestring_points.push(Point::new(cx as f32, cy as f32));
-                    }
-                } else {
-                    assert!(false);
-                }
-
-                lines.push(LineString(linestring_points));
-            }
-
-            assert!(lines.len() > 0);
-            if lines.len() == 1 {
-                Geometry::LineString(lines.remove(0))
-            } else {
-                Geometry::MultiLineString(MultiLineString(lines))
-            }
-
-        },
-        vector_tile::Tile_GeomType::POLYGON => {
-            let mut cx = 0;
-            let mut cy = 0;
-            assert_eq!(commands.0.len() % 3, 0);
-            let mut rings  = Vec::with_capacity(commands.0.len()/3);
-            //println!("\nNew\nCommands: {:?}", commands.0);
-            for cmds in commands.0.chunks(3) {
-                assert_eq!(cmds.len(), 3);
-                let mut linestring_points = Vec::new();
-
-                if let DrawingCommand::MoveTo(ref points) = cmds[0] {
-                    assert_eq!(points.len(), 1);
-                    let (dx, dy) = points[0];
-                    cx += dx;
-                    cy += dy;
-                    linestring_points.push(Point::new(cx as f32, cy as f32));
-                } else {
-                    assert!(false);
-                }
-                if let DrawingCommand::LineTo(ref points) = cmds[1] {
-                    assert!(points.len() > 1);
-                    linestring_points.reserve(points.len());
-                    for &(dx, dy) in points.into_iter() {
-                        cx += dx;
-                        cy += dy;
-                        linestring_points.push(Point::new(cx as f32, cy as f32));
-                    }
-                } else {
-                    assert!(false);
-                }
-                if let DrawingCommand::ClosePath = cmds[2] {
-                    let line = LineString(linestring_points);
-                    let winding_order = winding_order(&line);
-                    rings.push((line, winding_order));
-                } else {
-                    assert!(false);
-                }
-            }
-
-            assert!(rings.len() > 0);
-            let mut polygons = Vec::new();
-            loop {
-                if rings.len() == 0 {
-                    break;
-                }
-                //println!("rings {:?}", rings.iter().map(|ref x| x.1.clone()).collect::<Vec<WindingOrder>>());
-                let (exterior_ring, winding_order) = rings.remove(0);
-                // FIXME put this back in
-                //assert_eq!(winding_order, WindingOrder::Clockwise);
-                let mut inner_rings = Vec::new();
-                if rings.len() > 0 {
-                    loop {
-                        if rings.len() == 0 || rings[0].1 == WindingOrder::Clockwise  {
-                            break;
-                        }
-                        assert!(rings.len() > 0);
-                        inner_rings.push(rings.remove(0).0);
-                    }
-                }
-                polygons.push(Polygon::new(exterior_ring, inner_rings));
-            }
-            assert!(polygons.len() > 0);
-
-            if polygons.len() == 1 {
-                // FIXME spec diff?
-                Geometry::Polygon(polygons.remove(0))
-            } else {
-                Geometry::MultiPolygon(MultiPolygon(polygons))
-            }
-        },
-        vector_tile::Tile_GeomType::UNKNOWN => unreachable!(),
+    if cmds.len() == 1 && cmds[0].is_moveto() {
+        vector_tile::Tile_GeomType::POINT
+    } else if cmds.iter().any(|cmd| cmd.is_closepath()) {
+        vector_tile::Tile_GeomType::POLYGON
+    } else {
+        vector_tile::Tile_GeomType::LINESTRING
     }
+
+}
+
+impl From<DrawingCommands> for Geometry<i32> {
+    fn from(commands: DrawingCommands) -> Geometry<i32> {
+        let geom_type = deduce_geom_type(&commands);
+
+        match geom_type {
+            vector_tile::Tile_GeomType::POINT => {
+                // Specs define this, but maybe we should make this return a Result instead of an
+                // assertion
+                assert_eq!(commands.0.len(), 1);
+                    match commands.0[0] {
+                    DrawingCommand::MoveTo(ref points) => {
+                        if points.len() == 0 {
+                            unreachable!()
+                        } else if points.len() == 1 {
+                            Geometry::Point(Point::new(points[0].0 as i32, points[0].1 as i32))
+                        } else if points.len() > 1 {
+                            let mut cx = 0;
+                            let mut cy = 0;
+                            let mut new_points = Vec::with_capacity(points.len());
+                            for p in points.into_iter() {
+                                cx = cx + p.0;
+                                cy = cy + p.1;
+                                new_points.push(Point::new(cx as i32, cy as i32));
+                            }
+                            Geometry::MultiPoint(MultiPoint(new_points))
+                        } else {
+                            unreachable!();
+                        } 
+                    }
+                    _ => { unreachable!() },
+                }
+            },
+            vector_tile::Tile_GeomType::LINESTRING => {
+                let mut cx = 0;
+                let mut cy = 0;
+                assert_eq!(commands.0.len() % 2, 0);
+                let mut lines: Vec<LineString<i32>> = Vec::with_capacity(commands.0.len()/2);
+                for cmds in commands.0.chunks(2) {
+                    assert_eq!(cmds.len(), 2);
+
+                    let mut linestring_points = Vec::new();
+
+                    if let DrawingCommand::MoveTo(ref points) = cmds[0] {
+                        assert_eq!(points.len(), 1);
+                        let (dx, dy) = points[0];
+                        cx += dx;
+                        cy += dy;
+                        linestring_points.push(Point::new(cx as i32, cy as i32));
+                    } else {
+                        assert!(false);
+                    }
+                    if let DrawingCommand::LineTo(ref points) = cmds[1] {
+                        assert!(points.len() > 0);
+                        linestring_points.reserve(points.len());
+                        for &(dx, dy) in points.into_iter() {
+                            cx += dx;
+                            cy += dy;
+                            linestring_points.push(Point::new(cx as i32, cy as i32));
+                        }
+                    } else {
+                        assert!(false);
+                    }
+
+                    lines.push(LineString(linestring_points));
+                }
+
+                assert!(lines.len() > 0);
+                if lines.len() == 1 {
+                    Geometry::LineString(lines.remove(0))
+                } else {
+                    Geometry::MultiLineString(MultiLineString(lines))
+                }
+
+            },
+            vector_tile::Tile_GeomType::POLYGON => {
+                let mut cx = 0;
+                let mut cy = 0;
+                assert_eq!(commands.0.len() % 3, 0);
+                let mut rings  = Vec::with_capacity(commands.0.len()/3);
+                for cmds in commands.0.chunks(3) {
+                    assert_eq!(cmds.len(), 3);
+                    let mut linestring_points = Vec::new();
+
+                    if let DrawingCommand::MoveTo(ref points) = cmds[0] {
+                        assert_eq!(points.len(), 1);
+                        let (dx, dy) = points[0];
+                        cx += dx;
+                        cy += dy;
+                        linestring_points.push(Point::new(cx as i32, cy as i32));
+                    } else {
+                        assert!(false);
+                    }
+                    if let DrawingCommand::LineTo(ref points) = cmds[1] {
+                        assert!(points.len() > 1);
+                        linestring_points.reserve(points.len());
+                        for &(dx, dy) in points.into_iter() {
+                            cx += dx;
+                            cy += dy;
+                            linestring_points.push(Point::new(cx as i32, cy as i32));
+                        }
+                    } else {
+                        assert!(false);
+                    }
+                    if let DrawingCommand::ClosePath = cmds[2] {
+                        // FIXME add first/last point
+                        let line = LineString(linestring_points);
+                        let winding_order = line.winding_order().unwrap();
+                        rings.push((line, winding_order));
+                    } else {
+                        assert!(false);
+                    }
+                }
+
+                assert!(rings.len() > 0);
+                let mut polygons = Vec::new();
+                loop {
+                    if rings.len() == 0 {
+                        break;
+                    }
+                    let (exterior_ring, winding_order) = rings.remove(0);
+                    let mut inner_rings = Vec::new();
+                    if rings.len() > 0 {
+                        loop {
+                            if rings.len() == 0 || rings[0].1 == WindingOrder::Clockwise  {
+                                break;
+                            }
+                            assert!(rings.len() > 0);
+                            inner_rings.push(rings.remove(0).0);
+                        }
+                    }
+                    polygons.push(Polygon::new(exterior_ring, inner_rings));
+                }
+                assert!(polygons.len() > 0);
+
+                if polygons.len() == 1 {
+                    // FIXME spec diff?
+                    Geometry::Polygon(polygons.remove(0))
+                } else {
+                    Geometry::MultiPolygon(MultiPolygon(polygons))
+                }
+            },
+            vector_tile::Tile_GeomType::UNKNOWN => unreachable!(),
+        }
+    }
+}
+
+fn move_cursor(current: &mut (i32, i32), point: &Point<i32>) -> (i32, i32) {
+    let x = point.x();
+    let y = point.y();
+
+    let dx = x - current.0;
+    let dy = y - current.1;
+
+    current.0 = x;
+    current.1 = y;
+
+    (dx, dy)
+
 }
 
 // FIXME these 2 conversions should be TryFrom which throw an error for non-integer coords
-impl From<Point<f32>> for DrawingCommands {
-    fn from(point: Point<f32>) -> DrawingCommands {
-        DrawingCommands(vec![DrawingCommand::MoveTo(vec![(point.x().trunc() as i32, point.y().trunc() as i32)])])
+impl From<Point<i32>> for DrawingCommands {
+    fn from(point: Point<i32>) -> DrawingCommands {
+        DrawingCommands(vec![DrawingCommand::MoveTo(vec![(point.x(), point.y())])])
     }
 }
 
-impl From<MultiPoint<f32>> for DrawingCommands {
-    fn from(mp: MultiPoint<f32>) -> DrawingCommands {
+impl From<MultiPoint<i32>> for DrawingCommands {
+    fn from(mp: MultiPoint<i32>) -> DrawingCommands {
         let mut offsets = Vec::with_capacity(mp.0.len());
-        let (mut cx, mut cy) = (0, 0);
+        let mut cursor = (0, 0);
         for p in mp.0 {
-            let x = p.x().trunc() as i32;
-            let y = p.y().trunc() as i32;
-            let dx = x - cx;
-            let dy = y - cy;
-            cx = x;
-            cy = y;
-            offsets.push((dx, dy));
+            offsets.push(move_cursor(&mut cursor, &p));
         }
 
         DrawingCommands(vec![DrawingCommand::MoveTo(offsets)])
     }
 }
 
-impl From<Geometry<f32>> for DrawingCommands {
-    fn from(g: Geometry<f32>) -> DrawingCommands {
+impl From<LineString<i32>> for DrawingCommands {
+    fn from(ls: LineString<i32>) -> DrawingCommands {
+        // FIXME error check <2 points
+        let mut cmds = Vec::with_capacity(2);
+        let mut cursor = (0, 0);
+        cmds.push(DrawingCommand::MoveTo(vec![move_cursor(&mut cursor, &ls.0[0])]));
+
+        let mut offsets = Vec::with_capacity(ls.0.len()-1);
+        for p in ls.0.iter().skip(1) {
+            offsets.push(move_cursor(&mut cursor, &p));
+        }
+
+        cmds.push(DrawingCommand::LineTo(offsets));
+
+        DrawingCommands(cmds)
+
+    }
+}
+
+impl From<MultiLineString<i32>> for DrawingCommands {
+    fn from(mls: MultiLineString<i32>) -> DrawingCommands {
+        // FIXME check for zero linestrings
+
+        let mut cmds = Vec::with_capacity(2*mls.0.len());
+        let mut cursor = (0, 0);
+
+        for (line_idx, line) in mls.0.iter().enumerate() {
+            cmds.push(DrawingCommand::MoveTo(vec![move_cursor(&mut cursor, &line.0[0])]));
+
+            // FIXME error check <2 points
+
+            let mut offsets = Vec::with_capacity(line.0.len()-1);
+            for p in line.0.iter().skip(1) {
+                offsets.push(move_cursor(&mut cursor, &p));
+            }
+
+            cmds.push(DrawingCommand::LineTo(offsets));
+        }
+
+        DrawingCommands(cmds)
+    }
+}
+
+impl From<Polygon<i32>> for DrawingCommands {
+    fn from(poly: Polygon<i32>) -> DrawingCommands {
+        // Direction::Default means ext rings are ccw, but the vtile spec requires CW. *However*
+        // vtiles have an inverted Y axis (Y is positive down), so this makes it work
+        let poly = poly.orient_default();
+
+        let mut cmds = Vec::with_capacity(3+3*poly.interiors.len());
+        let mut cursor = (0, 0);
+
+        cmds.push(DrawingCommand::MoveTo(vec![move_cursor(&mut cursor, &poly.exterior.0[0])]));
+
+        let mut offsets = Vec::with_capacity(poly.exterior.0.len()-1);
+        for (i, p) in poly.exterior.0.iter().enumerate() {
+            if i == 0 || i == poly.exterior.0.len() - 1 {
+                continue;
+            }
+            offsets.push(move_cursor(&mut cursor, &p));
+        }
+
+        cmds.push(DrawingCommand::LineTo(offsets));
+        cmds.push(DrawingCommand::ClosePath);
+
+        for int_ring in poly.interiors.iter() {
+            cmds.push(DrawingCommand::MoveTo(vec![move_cursor(&mut cursor, &int_ring.0[0])]));
+
+            let mut offsets = Vec::with_capacity(int_ring.0.len()-1);
+            for (i, p) in int_ring.0.iter().enumerate() {
+                if i == 0 || i == int_ring.0.len() - 1 {
+                    continue;
+                }
+                offsets.push(move_cursor(&mut cursor, &p));
+            }
+
+            cmds.push(DrawingCommand::LineTo(offsets));
+            cmds.push(DrawingCommand::ClosePath);
+        }
+
+        DrawingCommands(cmds)
+    }
+}
+
+
+
+impl From<MultiPolygon<i32>> for DrawingCommands {
+    fn from(mpoly: MultiPolygon<i32>) -> DrawingCommands {
+        // Direction::Default means ext rings are ccw, but the vtile spec requires CW. *However*
+        // vtiles have an inverted Y axis (Y is positive down), so this makes it work
+        let mpoly = mpoly.orient_default();
+        let mut cmds = Vec::new();
+
+        let mut cursor = (0, 0);
+
+        for poly in mpoly.0 {
+
+            cmds.push(DrawingCommand::MoveTo(vec![move_cursor(&mut cursor, &poly.exterior.0[0])]));
+
+            let mut offsets = Vec::with_capacity(poly.exterior.0.len()-1);
+            for (i, p) in poly.exterior.0.iter().enumerate() {
+                if i == 0 || i == poly.exterior.0.len() - 1 {
+                    continue;
+                }
+                offsets.push(move_cursor(&mut cursor, &p));
+            }
+
+            cmds.push(DrawingCommand::LineTo(offsets));
+            cmds.push(DrawingCommand::ClosePath);
+
+            for int_ring in poly.interiors.iter() {
+                cmds.push(DrawingCommand::MoveTo(vec![move_cursor(&mut cursor, &int_ring.0[0])]));
+
+                let mut offsets = Vec::with_capacity(int_ring.0.len()-1);
+                for (i, p) in int_ring.0.iter().enumerate() {
+                    if i == 0 || i == int_ring.0.len() - 1 {
+                        continue;
+                    }
+                    offsets.push(move_cursor(&mut cursor, &p));
+                }
+
+                cmds.push(DrawingCommand::LineTo(offsets));
+                cmds.push(DrawingCommand::ClosePath);
+            }
+        }
+
+
+        DrawingCommands(cmds)
+    }
+}
+
+
+impl From<Geometry<i32>> for DrawingCommands {
+    fn from(g: Geometry<i32>) -> DrawingCommands {
         match g {
             Geometry::Point(x) => x.into(),
+            Geometry::LineString(x) => x.into(),
+            Geometry::Polygon(x) => x.into(),
             Geometry::MultiPoint(x) => x.into(),
+            Geometry::MultiLineString(x) => x.into(),
+            Geometry::MultiPolygon(x) => x.into(),
             _ => unimplemented!(),
         }
     }
@@ -721,7 +927,26 @@ impl From<DrawingCommands> for Vec<u32> {
                         res.push(dy);
                     }
                 },
-                _ => unimplemented!(),
+                DrawingCommand::LineTo(points) => {
+                    res.reserve(1 + points.len()*2);
+                    let count = points.len() as u32;
+                    let id: u32 = 2;
+                    let cmd_int = (id & 0x7) | (count << 3);
+                    res.push(cmd_int);
+                    for (dx, dy) in points {
+                        let dx = ((dx << 1) ^ (dx >> 31)) as u32;
+                        let dy = ((dy << 1) ^ (dy >> 31)) as u32;
+                        res.push(dx);
+                        res.push(dy);
+                    }
+                },
+                DrawingCommand::ClosePath => {
+                    //let count = 1;
+                    //let id: u32 = 7
+                    //let cmd_int = (id & 0x7) | (count << 3);
+                    // id 7 and count of 1
+                    res.push(15);
+                }
             }
         }
         res
@@ -730,10 +955,10 @@ impl From<DrawingCommands> for Vec<u32> {
 
 #[cfg(test)]
 mod test {
+    use super::*;
 
     #[test]
     fn test_creation() {
-        use super::*;
 
         let mut t = Tile::new();
         let l: Layer = Layer::new("fart".to_string());
@@ -745,12 +970,11 @@ mod test {
         assert_eq!(t.layers[0].name, "poop");
         assert_eq!(t.layers[0].extent, 4096);
 
-        t.add_feature("poop", Feature::new(Geometry::Point(Point::new(10., 10.)), Properties::new().set("name", "fart")));
+        t.add_feature("poop", Feature::new(Geometry::Point(Point::new(10, 10)), Properties::new().set("name", "fart")));
     }
 
     #[test]
     fn test_properties() {
-        use super::*;
         let mut p = Properties::new();
         p.insert("name", "bar");
         p.insert("visible", false);
@@ -759,18 +983,118 @@ mod test {
     }
 
     #[test]
-    fn test_geom_encoding() {
-        use super::*;
-
-        let p = Point::new(25., 17.);
+    fn encode_point() {
+        let p = Point::new(25, 17);
         let dc: DrawingCommands = p.into();
+        assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(25, 17)])]));
         let bytes: Vec<u32> = dc.into();
         assert_eq!(bytes, vec![9, 50, 34]);
+    }
 
-        let mp = MultiPoint(vec![Point::new(5., 7.), Point::new(3., 2.)]);
+    #[test]
+    fn decode_point() {
+        let bytes: Vec<u32> = vec![9, 50, 34];
+        let dc: DrawingCommands = bytes.into();
+        assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(25, 17)])]));
+        let p: Geometry<i32> = dc.into();
+        assert_eq!(p, Geometry::Point(Point::new(25, 17)));
+    }
+
+    #[test]
+    fn encode_linestring() {
+        let ls = LineString(vec![Point::new(2, 2), Point::new(2, 10), Point::new(10, 10)]);
+        let dc: DrawingCommands = ls.into();
+        assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(2, 2)]), DrawingCommand::LineTo(vec![(0, 8), (8, 0)])]));
+        let bytes: Vec<u32> = dc.into();
+        assert_eq!(bytes, vec![9, 4, 4, 18, 0, 16, 16, 0]);
+    }
+
+    #[test]
+    fn encode_polygon() {
+        let ls1 = LineString(vec![Point::new(3, 6), Point::new(8, 12), Point::new(20, 34), Point::new(3, 6)]);
+        let poly = Polygon::new(ls1, vec![]);
+        let dc: DrawingCommands = poly.into();
+        assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(3, 6)]), DrawingCommand::LineTo(vec![(5, 6), (12, 22)]), DrawingCommand::ClosePath]));
+        let bytes: Vec<u32> = dc.into();
+        assert_eq!(bytes, vec![9, 6, 12, 18, 10, 12, 24, 44, 15]);
+    }
+
+    #[test]
+    fn encode_polygon_with_hole() {
+        let poly = Polygon::new(
+            LineString(vec![Point::new(11, 11), Point::new(20, 11), Point::new(20, 20), Point::new(11, 20), Point::new(11, 11)]),
+            vec![
+                LineString(vec![Point::new(13, 13), Point::new(13, 17), Point::new(17, 17), Point::new(17, 13), Point::new(13, 13)])
+            ]);
+
+        let dc: DrawingCommands = poly.into();
+        assert_eq!(dc, DrawingCommands(vec![
+                            DrawingCommand::MoveTo(vec![(11, 11)]),
+                            DrawingCommand::LineTo(vec![(9, 0), (0, 9), (-9, 0)]),
+                            DrawingCommand::ClosePath,
+                            DrawingCommand::MoveTo(vec![(2, -7)]),
+                            DrawingCommand::LineTo(vec![(0, 4), (4, 0), (0, -4)]),
+                            DrawingCommand::ClosePath,
+                            ]));
+
+        let bytes: Vec<u32> = dc.into();
+        assert_eq!(bytes, vec![ 9, 22, 22, 26, 18, 0, 0, 18, 17, 0, 15, 9, 4, 13, 26, 0, 8, 8, 0, 0, 7, 15 ]);
+    }
+
+    #[test]
+    fn encode_multipoint() {
+        let mp = MultiPoint(vec![Point::new(5, 7), Point::new(3, 2)]);
         let dc: DrawingCommands = mp.into();
+        assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(5, 7), (-2, -5)])]));
         let bytes: Vec<u32> = dc.into();
         assert_eq!(bytes, vec![17, 10, 14, 3, 9]);
+    }
+
+    #[test]
+    fn decode_multipoint() {
+        let bytes: Vec<u32> = vec![17, 10, 14, 3, 9];
+        let dc: DrawingCommands = bytes.into();
+        let mp: Geometry<i32> = dc.into();
+        assert_eq!(mp, Geometry::MultiPoint(MultiPoint(vec![Point::new(5, 7), Point::new(3, 2)])));
+    }
+
+    #[test]
+    fn encode_multilinestring() {
+        let ls1 = LineString(vec![Point::new(2, 2), Point::new(2, 10), Point::new(10, 10)]);
+        let ls2 = LineString(vec![Point::new(1, 1), Point::new(3, 5)]);
+        let mls = MultiLineString(vec![ls1, ls2]);
+        let dc: DrawingCommands = mls.into();
+        assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(2, 2)]), DrawingCommand::LineTo(vec![(0, 8), (8, 0)]), DrawingCommand::MoveTo(vec![(-9, -9)]), DrawingCommand::LineTo(vec![(2, 4)])]));
+        let bytes: Vec<u32> = dc.into();
+        assert_eq!(bytes, vec![9, 4, 4, 18, 0, 16, 16, 0, 9, 17, 17, 10, 4, 8]);
+    }
+
+    #[test]
+    fn encode_multipolygon() {
+        let poly1 = Polygon::new(LineString(vec![Point::new(0, 0), Point::new(10, 0), Point::new(10, 10), Point::new(0, 10), Point::new(0, 0)]), vec![]);
+        let poly2 = Polygon::new(
+            LineString(vec![Point::new(11, 11), Point::new(20, 11), Point::new(20, 20), Point::new(11, 20), Point::new(11, 11)]),
+            vec![
+                LineString(vec![Point::new(13, 13), Point::new(13, 17), Point::new(17, 17), Point::new(17, 13), Point::new(13, 13)])
+            ]);
+
+        let mp = MultiPolygon(vec![poly1, poly2]);
+
+        let dc: DrawingCommands = mp.into();
+        assert_eq!(dc, DrawingCommands(vec![
+                            DrawingCommand::MoveTo(vec![(0, 0)]),
+                            DrawingCommand::LineTo(vec![(10, 0), (0, 10), (-10, 0)]),
+                            DrawingCommand::ClosePath,
+                            DrawingCommand::MoveTo(vec![(11, 1)]),
+                            DrawingCommand::LineTo(vec![(9, 0), (0, 9), (-9, 0)]),
+                            DrawingCommand::ClosePath,
+                            DrawingCommand::MoveTo(vec![(2, -7)]),
+                            DrawingCommand::LineTo(vec![(0, 4), (4, 0), (0, -4)]),
+                            DrawingCommand::ClosePath,
+                            ]));
+
+        let bytes: Vec<u32> = dc.into();
+        assert_eq!(bytes, vec![ 9, 0, 0, 26, 20, 0, 0, 20, 19, 0, 15, 9, 22, 2, 26, 18, 0, 0, 18, 17, 0, 15, 9, 4, 13, 26, 0, 8, 8, 0, 0, 7, 15 ])
     }
 
 }

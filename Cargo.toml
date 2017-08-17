@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Rory McCann <rory@technomancy.org>"]
 
 [dependencies]
-geo = "0.4.7"
+geo = { git = "file:///home/rory/code/rust/rust-geo", branch = "rory-everything" }
 protobuf = "*"
 flate2 = { version = "0.2", features = ["zlib"] }
 slippy-map-tiles = "*"
