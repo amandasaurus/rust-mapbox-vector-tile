@@ -173,38 +173,89 @@ impl<'a> From<&'a str> for Layer {
     }
 }
 
-impl<'a> From<&'a Layer> for vector_tile::Tile_Layer {
-    fn from(l: &Layer) -> vector_tile::Tile_Layer {
+#[derive(Debug)]
+struct TagIndex<T>
+    where T: Sized
+{
+    _data: Vec<(usize, T)>
+}
+
+impl<T> TagIndex<T>
+    where T: Sized+PartialEq+ToOwned+Clone
+{
+    fn new() -> Self {
+        TagIndex{ _data: Vec::new() }
+    }
+
+    fn add_item(&mut self, item: &T) {
+        match self._data.iter().enumerate().filter(|&(i, &(num, ref val))| val == item).take(1).nth(0) {
+            None => {
+                // not found, insert at end
+                self._data.push((1, item.clone()));
+            },
+            Some((i, _)) => {
+                // it's at position i
+                self._data[i].0 += 1;
+                
+                // bubble it up so that it's all in order
+                let mut i = i;
+                loop {
+                    if i == 0 { break; }
+                    if self._data[i].0 > self._data[i-1].0 {
+                        self._data.swap(i, i-1);
+                    }
+                    i -= 1;
+                }
+            }
+        }
+
+    }
+
+    fn index_for_item(&self, item: &T) -> usize {
+        self._data.iter().enumerate().filter_map(|(i, &(num, ref val))| if val == item { Some(i) } else { None }).take(1).nth(0).unwrap()
+    }
+
+    // FIXME getting warnings about lifetime for T
+    //fn into_items(self) ->  {
+    //    self._data.into_iter().map(|x| x.1)
+    //}
+}
+
+fn create_indexes(features: &Vec<Feature>) -> (TagIndex<String>, TagIndex<Value>) {
+    let mut keys: TagIndex<String> = TagIndex::new();
+    let mut values: TagIndex<Value> = TagIndex::new();
+
+    for f in features.iter() {
+        for (k, v) in f.properties.0.iter() {
+            keys.add_item(&k);
+            values.add_item(&v);
+        }
+    }
+
+    (keys, values)
+}
+
+impl Into<vector_tile::Tile_Layer> for Layer {
+    fn into(self) -> vector_tile::Tile_Layer {
         let mut res = vector_tile::Tile_Layer::new();
 
-        res.set_name(l.name.clone());
+        let Layer{ name, features, extent } = self;
+
+        res.set_name(name);
         res.set_version(2);
-        res.set_extent(l.extent);
+        res.set_extent(extent);
 
-        // make key index
-        let all_keys: Vec<&String> = l.features.iter().flat_map(|f| f.properties.0.keys()).collect();
-        let (keys_in_order, number_for_key) = make_index(&all_keys);
+        let (keys, values) = create_indexes(&features);
 
-        for k in keys_in_order {
-            res.mut_keys().push(k.clone());
-        }
-
-        let all_values: Vec<&Value> = l.features.iter().flat_map(|f| f.properties.0.values()).collect();
-        let (values_in_order, number_for_value) = make_index(&all_values);
-        for v in values_in_order {
-            res.mut_values().push(v.into());
-        }
-        //println!("values_in_order {:?} number_for_value {:?}", values_in_order, number_for_value);
 
         // There's lots of 'cannot move out of borrowed context' errors here
-        for f in l.features.iter() {
+        for f in features.into_iter() {
             let mut pbf_feature = vector_tile::Tile_Feature::new();
             for (k, v) in f.properties.0.iter() {
-                pbf_feature.mut_tags().push(number_for_key[&k]);
-                pbf_feature.mut_tags().push(number_for_value[&v]);
+                pbf_feature.mut_tags().push(keys.index_for_item(k) as u32);
+                pbf_feature.mut_tags().push(values.index_for_item(&v) as u32);
             }
-            // FIXME remove clone
-            let geom: DrawingCommands = f.geometry.clone().into();
+            let geom: DrawingCommands = (&f.geometry).into();
             pbf_feature.set_geometry(geom.into());
 
             pbf_feature.set_field_type(match f.geometry {
@@ -221,25 +272,17 @@ impl<'a> From<&'a Layer> for vector_tile::Tile_Layer {
             res.mut_features().push(pbf_feature);
         }
 
+        // set the keys & values
+        for k in keys._data.into_iter().map(|x| x.1) {
+            res.mut_keys().push(k)
+        }
+        for v in values._data.into_iter().map(|x| x.1) {
+            res.mut_values().push(v.into())
+        }
+
         res
     }
 }
-
-fn make_index<'a, T: Ord+Hash+Eq>(input: &[&'a T]) -> (Vec<&'a T>, HashMap<&'a T, u32>) {
-    let mut counter = HashMap::new();
-    for key in input {
-        let val = counter.entry(key).or_insert(0);
-        *val += 1;
-    }
-    let mut popular_items: Vec<_> = counter.into_iter().map(|(k, v)| (v, k)).collect();
-    popular_items.sort();
-    let popular_items = popular_items;
-    let number_for_key: HashMap<&T, u32> = popular_items.iter().enumerate().map(|(i, &(v, k))| (*k, i as u32)).collect();
-    let keys_in_order: Vec<&T> = popular_items.iter().map(|&(v, k)| *k).collect();
-
-    (keys_in_order, number_for_key)
-}
-
 
 #[derive(Debug,PartialEq,Serialize,Clone)]
 pub struct Tile {
@@ -292,13 +335,13 @@ impl Tile {
         layer.add_feature(f);
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(self) -> Vec<u8> {
         let mut res = Vec::new();
         self.write_to(&mut res);
         res
     }
 
-    pub fn to_compressed_bytes(&self) -> Vec<u8> {
+    pub fn to_compressed_bytes(self) -> Vec<u8> {
         let bytes = self.to_bytes();
         let mut compressor = Vec::with_capacity(bytes.len()/2).gz_encode(Compression::Default);
         compressor.write(&bytes).unwrap();
@@ -308,14 +351,14 @@ impl Tile {
         new_bytes
     }
 
-    pub fn write_to<W: std::io::Write>(&self, writer: &mut W)  {
+    pub fn write_to<W: std::io::Write>(self, writer: &mut W)  {
         let converted: vector_tile::Tile = self.into();
         let mut cos = protobuf::CodedOutputStream::new(writer);
         converted.write_to(&mut cos).unwrap();
         cos.flush().unwrap();
     }
 
-    pub fn write_to_file(&self, filename: &str)  {
+    pub fn write_to_file(self, filename: &str)  {
         let mut file = BufWriter::new(File::create(filename).unwrap());
         file.write_all(&self.to_compressed_bytes()).unwrap();
     }
@@ -326,11 +369,11 @@ impl Tile {
 
 }
 
-impl<'a> From<&'a Tile> for vector_tile::Tile {
-    fn from(tile: &Tile) -> vector_tile::Tile {
+impl Into<vector_tile::Tile> for Tile {
+    fn into(self) -> vector_tile::Tile {
         let mut result = vector_tile::Tile::new();
 
-        for layer in tile.layers.iter() {
+        for layer in self.layers.into_iter() {
             result.mut_layers().push(layer.into());
         }
 
@@ -430,18 +473,18 @@ impl From<vector_tile::Tile_Value> for Value {
     }
 }
 
-impl<'a> From<&'a Value> for vector_tile::Tile_Value {
-    fn from(val: &Value) -> vector_tile::Tile_Value {
+impl Into<vector_tile::Tile_Value> for Value {
+    fn into(self) -> vector_tile::Tile_Value {
         let mut res = vector_tile::Tile_Value::new();
-        match val {
-            &Value::String(ref s) => res.set_string_value(s.clone()),
-            &Value::Float(s) => res.set_float_value(s),
-            &Value::Double(s) => res.set_double_value(s),
-            &Value::Int(s) => res.set_int_value(s),
-            &Value::UInt(s) => res.set_uint_value(s),
-            &Value::SInt(s) => res.set_sint_value(s),
-            &Value::Boolean(s) => res.set_bool_value(s),
-            &Value::Unknown => {},
+        match self {
+            Value::String(s) => res.set_string_value(s),
+            Value::Float(s) => res.set_float_value(s),
+            Value::Double(s) => res.set_double_value(s),
+            Value::Int(s) => res.set_int_value(s),
+            Value::UInt(s) => res.set_uint_value(s),
+            Value::SInt(s) => res.set_sint_value(s),
+            Value::Boolean(s) => res.set_bool_value(s),
+            Value::Unknown => {},
         }
 
         res
@@ -744,17 +787,17 @@ fn move_cursor(current: &mut (i32, i32), point: &Point<i32>) -> (i32, i32) {
 }
 
 // FIXME these 2 conversions should be TryFrom which throw an error for non-integer coords
-impl From<Point<i32>> for DrawingCommands {
-    fn from(point: Point<i32>) -> DrawingCommands {
+impl<'a> From<&'a Point<i32>> for DrawingCommands {
+    fn from(point: &'a Point<i32>) -> DrawingCommands {
         DrawingCommands(vec![DrawingCommand::MoveTo(vec![(point.x(), point.y())])])
     }
 }
 
-impl From<MultiPoint<i32>> for DrawingCommands {
-    fn from(mp: MultiPoint<i32>) -> DrawingCommands {
+impl<'a> From<&'a MultiPoint<i32>> for DrawingCommands {
+    fn from(mp: &'a MultiPoint<i32>) -> DrawingCommands {
         let mut offsets = Vec::with_capacity(mp.0.len());
         let mut cursor = (0, 0);
-        for p in mp.0 {
+        for p in mp.0.iter() {
             offsets.push(move_cursor(&mut cursor, &p));
         }
 
@@ -762,8 +805,8 @@ impl From<MultiPoint<i32>> for DrawingCommands {
     }
 }
 
-impl From<LineString<i32>> for DrawingCommands {
-    fn from(ls: LineString<i32>) -> DrawingCommands {
+impl<'a> From<&'a LineString<i32>> for DrawingCommands {
+    fn from(ls: &'a LineString<i32>) -> DrawingCommands {
         // FIXME error check <2 points
         let mut cmds = Vec::with_capacity(2);
         let mut cursor = (0, 0);
@@ -781,8 +824,8 @@ impl From<LineString<i32>> for DrawingCommands {
     }
 }
 
-impl From<MultiLineString<i32>> for DrawingCommands {
-    fn from(mls: MultiLineString<i32>) -> DrawingCommands {
+impl<'a> From<&'a MultiLineString<i32>> for DrawingCommands {
+    fn from(mls: &'a MultiLineString<i32>) -> DrawingCommands {
         // FIXME check for zero linestrings
 
         let mut cmds = Vec::with_capacity(2*mls.0.len());
@@ -805,8 +848,8 @@ impl From<MultiLineString<i32>> for DrawingCommands {
     }
 }
 
-impl From<Polygon<i32>> for DrawingCommands {
-    fn from(poly: Polygon<i32>) -> DrawingCommands {
+impl<'a> From<&'a Polygon<i32>> for DrawingCommands {
+    fn from(poly: &'a Polygon<i32>) -> DrawingCommands {
         // Direction::Default means ext rings are ccw, but the vtile spec requires CW. *However*
         // vtiles have an inverted Y axis (Y is positive down), so this makes it work
         let poly = poly.orient_default();
@@ -848,8 +891,8 @@ impl From<Polygon<i32>> for DrawingCommands {
 
 
 
-impl From<MultiPolygon<i32>> for DrawingCommands {
-    fn from(mpoly: MultiPolygon<i32>) -> DrawingCommands {
+impl<'a> From<&'a MultiPolygon<i32>> for DrawingCommands {
+    fn from(mpoly: &'a MultiPolygon<i32>) -> DrawingCommands {
         // Direction::Default means ext rings are ccw, but the vtile spec requires CW. *However*
         // vtiles have an inverted Y axis (Y is positive down), so this makes it work
         let mpoly = mpoly.orient_default();
@@ -894,15 +937,15 @@ impl From<MultiPolygon<i32>> for DrawingCommands {
 }
 
 
-impl From<Geometry<i32>> for DrawingCommands {
-    fn from(g: Geometry<i32>) -> DrawingCommands {
+impl<'a> From<&'a Geometry<i32>> for DrawingCommands {
+    fn from(g: &'a Geometry<i32>) -> DrawingCommands {
         match g {
-            Geometry::Point(x) => x.into(),
-            Geometry::LineString(x) => x.into(),
-            Geometry::Polygon(x) => x.into(),
-            Geometry::MultiPoint(x) => x.into(),
-            Geometry::MultiLineString(x) => x.into(),
-            Geometry::MultiPolygon(x) => x.into(),
+            &Geometry::Point(ref x) => x.into(),
+            &Geometry::LineString(ref x) => x.into(),
+            &Geometry::Polygon(ref x) => x.into(),
+            &Geometry::MultiPoint(ref x) => x.into(),
+            &Geometry::MultiLineString(ref x) => x.into(),
+            &Geometry::MultiPolygon(ref x) => x.into(),
             _ => unimplemented!(),
         }
     }
@@ -985,7 +1028,7 @@ mod test {
     #[test]
     fn encode_point() {
         let p = Point::new(25, 17);
-        let dc: DrawingCommands = p.into();
+        let dc: DrawingCommands = (&p).into();
         assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(25, 17)])]));
         let bytes: Vec<u32> = dc.into();
         assert_eq!(bytes, vec![9, 50, 34]);
@@ -1003,7 +1046,7 @@ mod test {
     #[test]
     fn encode_linestring() {
         let ls = LineString(vec![Point::new(2, 2), Point::new(2, 10), Point::new(10, 10)]);
-        let dc: DrawingCommands = ls.into();
+        let dc: DrawingCommands = (&ls).into();
         assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(2, 2)]), DrawingCommand::LineTo(vec![(0, 8), (8, 0)])]));
         let bytes: Vec<u32> = dc.into();
         assert_eq!(bytes, vec![9, 4, 4, 18, 0, 16, 16, 0]);
@@ -1013,7 +1056,7 @@ mod test {
     fn encode_polygon() {
         let ls1 = LineString(vec![Point::new(3, 6), Point::new(8, 12), Point::new(20, 34), Point::new(3, 6)]);
         let poly = Polygon::new(ls1, vec![]);
-        let dc: DrawingCommands = poly.into();
+        let dc: DrawingCommands = (&poly).into();
         assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(3, 6)]), DrawingCommand::LineTo(vec![(5, 6), (12, 22)]), DrawingCommand::ClosePath]));
         let bytes: Vec<u32> = dc.into();
         assert_eq!(bytes, vec![9, 6, 12, 18, 10, 12, 24, 44, 15]);
@@ -1027,7 +1070,7 @@ mod test {
                 LineString(vec![Point::new(13, 13), Point::new(13, 17), Point::new(17, 17), Point::new(17, 13), Point::new(13, 13)])
             ]);
 
-        let dc: DrawingCommands = poly.into();
+        let dc: DrawingCommands = (&poly).into();
         assert_eq!(dc, DrawingCommands(vec![
                             DrawingCommand::MoveTo(vec![(11, 11)]),
                             DrawingCommand::LineTo(vec![(9, 0), (0, 9), (-9, 0)]),
@@ -1044,7 +1087,7 @@ mod test {
     #[test]
     fn encode_multipoint() {
         let mp = MultiPoint(vec![Point::new(5, 7), Point::new(3, 2)]);
-        let dc: DrawingCommands = mp.into();
+        let dc: DrawingCommands = (&mp).into();
         assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(5, 7), (-2, -5)])]));
         let bytes: Vec<u32> = dc.into();
         assert_eq!(bytes, vec![17, 10, 14, 3, 9]);
@@ -1063,7 +1106,7 @@ mod test {
         let ls1 = LineString(vec![Point::new(2, 2), Point::new(2, 10), Point::new(10, 10)]);
         let ls2 = LineString(vec![Point::new(1, 1), Point::new(3, 5)]);
         let mls = MultiLineString(vec![ls1, ls2]);
-        let dc: DrawingCommands = mls.into();
+        let dc: DrawingCommands = (&mls).into();
         assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(2, 2)]), DrawingCommand::LineTo(vec![(0, 8), (8, 0)]), DrawingCommand::MoveTo(vec![(-9, -9)]), DrawingCommand::LineTo(vec![(2, 4)])]));
         let bytes: Vec<u32> = dc.into();
         assert_eq!(bytes, vec![9, 4, 4, 18, 0, 16, 16, 0, 9, 17, 17, 10, 4, 8]);
@@ -1080,7 +1123,7 @@ mod test {
 
         let mp = MultiPolygon(vec![poly1, poly2]);
 
-        let dc: DrawingCommands = mp.into();
+        let dc: DrawingCommands = (&mp).into();
         assert_eq!(dc, DrawingCommands(vec![
                             DrawingCommand::MoveTo(vec![(0, 0)]),
                             DrawingCommand::LineTo(vec![(10, 0), (0, 10), (-10, 0)]),
@@ -1095,6 +1138,23 @@ mod test {
 
         let bytes: Vec<u32> = dc.into();
         assert_eq!(bytes, vec![ 9, 0, 0, 26, 20, 0, 0, 20, 19, 0, 15, 9, 22, 2, 26, 18, 0, 0, 18, 17, 0, 15, 9, 4, 13, 26, 0, 8, 8, 0, 0, 7, 15 ])
+    }
+
+
+    #[test]
+    fn test_index() {
+        let mut ti: TagIndex<String> = TagIndex::new();
+        ti.add_item(&"baz".to_string());
+        ti.add_item(&"foo".to_string());
+        ti.add_item(&"bar".to_string());
+        ti.add_item(&"bar".to_string());
+        ti.add_item(&"bar".to_string());
+        ti.add_item(&"baz".to_string());
+        assert_eq!(ti.index_for_item(&"bar".to_string()), 0);
+        assert_eq!(ti.index_for_item(&"baz".to_string()), 1);
+        assert_eq!(ti.index_for_item(&"foo".to_string()), 2);
+        //let keys: Vec<String> = ti.into_items().collect();
+        //assert_eq!(keys, vec!["bar".to_string(), "baz".to_string(), "foo".to_string()]);
     }
 
 }
