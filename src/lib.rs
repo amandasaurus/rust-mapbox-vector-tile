@@ -203,6 +203,9 @@ impl<T> TagIndex<T>
                     if i == 0 { break; }
                     if self._data[i].0 > self._data[i-1].0 {
                         self._data.swap(i, i-1);
+                    } else {
+                        // Everything is OK now
+                        break;
                     }
                     i -= 1;
                 }
