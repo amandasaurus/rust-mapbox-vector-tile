@@ -396,54 +396,6 @@ pub enum Value {
     Unknown,
 }
 
-// TODO add TryFrom for all the base types.
-
-impl Value {
-    pub fn to_string(self) -> Option<String> {
-        match self {
-            Value::String(s) => Some(s),
-            _ => None,
-        }
-    }
-    // TODO add more getters
-    
-    fn repr(&self) -> String {
-        match self {
-            &Value::String(ref s) => format!("String({:?})", s),
-            &Value::Float(ref s) => format!("Float({:?})", s),
-            &Value::Double(ref s) => format!("Double({:?})", s),
-            &Value::Int(ref s) => format!("Int({:?})", s),
-            &Value::UInt(ref s) => format!("UInt({:?})", s),
-            &Value::SInt(ref s) => format!("SInt({:?})", s),
-            &Value::Boolean(ref s) => format!("Boolean({:?})", s),
-            &Value::Unknown => format!("Unknown"),
-        }
-    }
-}
-
-impl Eq for Value {}
-impl Ord for Value {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.repr().cmp(&other.repr())
-    }
-
-}
-
-impl Hash for Value {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match self {
-            &Value::String(ref s) => s.hash(state),
-            &Value::Float(ref s) => self.repr().hash(state),
-            &Value::Double(ref s) => self.repr().hash(state),
-            &Value::Int(ref s) => s.hash(state),
-            &Value::UInt(ref s) => s.hash(state),
-            &Value::SInt(ref s) => s.hash(state),
-            &Value::Boolean(ref s) => s.hash(state),
-            &Value::Unknown => "Unknown".hash(state),
-        }
-    }
-}
-
 impl From<String> for Value { fn from(x: String) -> Value { Value::String(x) } }
 impl<'a> From<&'a str> for Value { fn from(x: &str) -> Value { Value::String(x.to_owned()) } }
 
