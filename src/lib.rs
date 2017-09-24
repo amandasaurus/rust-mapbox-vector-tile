@@ -158,6 +158,10 @@ impl Layer {
         // TODO error checking for non-integer geom?
         self.features.push(f);
     }
+
+    fn is_empty(&self) -> bool {
+        self.features.is_empty()
+    }
 }
 
 
@@ -268,7 +272,7 @@ impl Into<vector_tile::Tile_Layer> for Layer {
                 Geometry::MultiLineString(_) => vector_tile::Tile_GeomType::LINESTRING,
                 Geometry::Polygon(_) => vector_tile::Tile_GeomType::POLYGON,
                 Geometry::MultiPolygon(_) => vector_tile::Tile_GeomType::POLYGON,
-                _ => vector_tile::Tile_GeomType::UNKNOWN,
+                _ => vector_tile::Tile_GeomType::UNKNOWN
             });
 
 
@@ -355,6 +359,10 @@ impl Tile {
     }
 
     pub fn write_to<W: std::io::Write>(self, writer: &mut W)  {
+        if self.is_empty() {
+            return;
+        }
+
         let converted: vector_tile::Tile = self.into();
         let mut cos = protobuf::CodedOutputStream::new(writer);
         converted.write_to(&mut cos).unwrap();
@@ -370,6 +378,10 @@ impl Tile {
         serde_json::to_string(&self).unwrap()
     }
 
+    fn is_empty(&self) -> bool {
+        self.layers.iter().all(|l| l.is_empty())
+    }
+
 }
 
 impl Into<vector_tile::Tile> for Tile {
@@ -377,7 +389,9 @@ impl Into<vector_tile::Tile> for Tile {
         let mut result = vector_tile::Tile::new();
 
         for layer in self.layers.into_iter() {
-            result.mut_layers().push(layer.into());
+            if ! layer.is_empty() {
+                result.mut_layers().push(layer.into());
+            }
         }
 
         result
