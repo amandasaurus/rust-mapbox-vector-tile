@@ -351,7 +351,15 @@ impl Tile {
     pub fn to_compressed_bytes(self) -> Vec<u8> {
         let bytes = self.to_bytes();
         let mut compressor = Vec::with_capacity(bytes.len()/2).gz_encode(Compression::Default);
-        compressor.write(&bytes).unwrap();
+
+        // If you try to write it all in one go (or in chunks 100_000+, it doesn't write all the
+        // bytes, which obv creates an invalid protobuf file. Splitting it into smaller chunks
+        // fixes that.
+        // TODO this should return a Result, and we can then do something better than an assert
+        for chunk in bytes.chunks(10_000) {
+            let num_written = compressor.write(&chunk).unwrap();
+            assert_eq!(num_written, chunk.len());
+        }
         compressor.flush().unwrap();
         let new_bytes = compressor.finish().unwrap();
 
