@@ -356,7 +356,7 @@ impl Tile {
         // bytes, which obv creates an invalid protobuf file. Splitting it into smaller chunks
         // fixes that.
         // TODO this should return a Result, and we can then do something better than an assert
-        for chunk in bytes.chunks(10_000) {
+        for chunk in bytes.chunks(1_000) {
             let num_written = compressor.write(&chunk).unwrap();
             assert_eq!(num_written, chunk.len());
         }
