@@ -6,7 +6,7 @@ authors = ["Rory McCann <rory@technomancy.org>"]
 [dependencies]
 geo = { git = "file:///home/rory/code/rust/rust-geo", branch = "rory-everything" }
 protobuf = "*"
-flate2 = { version = "0.2", features = ["zlib"] }
+flate2 = "*"
 slippy-map-tiles = "*"
 serde = "*"
 serde_derive = "*"
