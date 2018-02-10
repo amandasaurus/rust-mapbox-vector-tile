@@ -19,7 +19,8 @@ use std::hash::{Hash, Hasher};
 
 use std::collections::{HashMap, HashSet, BTreeMap};
 use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon};
-use geo::orient::{Orient, Direction, WindingOrder};
+use geo::orient::{Orient, Direction};
+use geo::winding_order::{Winding, WindingOrder};
 use flate2::write::GzEncoder;
 use flate2::read::GzDecoder;
 use flate2::Compression;
@@ -722,7 +723,7 @@ impl From<DrawingCommands> for Geometry<i32> {
                     if let DrawingCommand::ClosePath = cmds[2] {
                         // FIXME add first/last point
                         let line = LineString(linestring_points);
-                        let winding_order = line.winding_order().unwrap();
+                        let winding_order = line.winding_order();
                         rings.push((line, winding_order));
                     } else {
                         assert!(false);
@@ -842,7 +843,7 @@ impl<'a> From<&'a Polygon<i32>> for DrawingCommands {
     fn from(poly: &'a Polygon<i32>) -> DrawingCommands {
         // Direction::Default means ext rings are ccw, but the vtile spec requires CW. *However*
         // vtiles have an inverted Y axis (Y is positive down), so this makes it work
-        let poly = poly.orient_default();
+        let poly = poly.orient(Direction::Default);
 
         let mut cmds = Vec::with_capacity(3+3*poly.interiors.len());
         let mut cursor = (0, 0);
@@ -885,7 +886,7 @@ impl<'a> From<&'a MultiPolygon<i32>> for DrawingCommands {
     fn from(mpoly: &'a MultiPolygon<i32>) -> DrawingCommands {
         // Direction::Default means ext rings are ccw, but the vtile spec requires CW. *However*
         // vtiles have an inverted Y axis (Y is positive down), so this makes it work
-        let mpoly = mpoly.orient_default();
+        let mpoly = mpoly.orient(Direction::Default);
         let mut cmds = Vec::new();
 
         let mut cursor = (0, 0);
