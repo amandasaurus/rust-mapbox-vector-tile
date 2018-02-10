@@ -20,8 +20,9 @@ use std::hash::{Hash, Hasher};
 use std::collections::{HashMap, HashSet, BTreeMap};
 use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon};
 use geo::orient::{Orient, Direction, WindingOrder};
-use flate2::{FlateReadExt, FlateWriteExt, Compression};
 use flate2::write::GzEncoder;
+use flate2::read::GzDecoder;
+use flate2::Compression;
 
 use serde::ser::{Serialize, Serializer, SerializeMap};
 
@@ -160,8 +161,25 @@ impl Layer {
         self.features.push(f);
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.features.is_empty()
+    }
+
+    pub fn write_to<W: std::io::Write>(self, writer: &mut W)  {
+        if self.is_empty() {
+            return;
+        }
+
+        let converted: vector_tile::Tile_Layer = self.into();
+        let mut cos = protobuf::CodedOutputStream::new(writer);
+        converted.write_to(&mut cos).unwrap();
+        cos.flush().unwrap();
+    }
+
+    pub fn to_bytes(self) -> Vec<u8> {
+        let mut res = Vec::new();
+        self.write_to(&mut res);
+        res
     }
 }
 
@@ -319,9 +337,9 @@ impl Tile {
     }
 
     pub fn from_compressed_bytes(bytes: &[u8]) -> Tile {
-        let cursor = Cursor::new(bytes);
+        let mut decompressor = GzDecoder::new(bytes);
         let mut contents: Vec<u8> = Vec::new();
-        cursor.gz_decode().unwrap().read_to_end(&mut contents).unwrap();
+        decompressor.read_to_end(&mut contents).unwrap();
 
         Tile::from_uncompressed_bytes(&contents)
     }
@@ -353,9 +371,6 @@ impl Tile {
         let bytes = self.to_bytes();
         let mut compressor = GzEncoder::new(Vec::with_capacity(bytes.len()/2), Compression::default());
 
-        // If you try to write it all in one go (or in chunks 100_000+, it doesn't write all the
-        // bytes, which obv creates an invalid protobuf file. Splitting it into smaller chunks
-        // fixes that.
         // TODO this should return a Result, and we can then do something better than an assert
         compressor.write_all(&bytes).unwrap();
         compressor.flush().unwrap();
