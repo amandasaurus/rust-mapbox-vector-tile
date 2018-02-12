@@ -740,7 +740,7 @@ impl From<DrawingCommands> for Geometry<i32> {
                     let mut inner_rings = Vec::new();
                     if rings.len() > 0 {
                         loop {
-                            if rings.len() == 0 || rings[0].1 == WindingOrder::Clockwise  {
+                            if rings.len() == 0 || rings[0].1 == Some(WindingOrder::Clockwise)  {
                                 break;
                             }
                             assert!(rings.len() > 0);
