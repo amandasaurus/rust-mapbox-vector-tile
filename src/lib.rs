@@ -16,6 +16,7 @@ use std::io::prelude::*;
 use std::io::Cursor;
 use protobuf::Message;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use std::collections::{HashMap, HashSet, BTreeMap};
 use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon};
@@ -64,7 +65,7 @@ impl Properties {
 #[derive(Debug,PartialEq,Clone)]
 pub struct Feature {
     pub geometry: geo::Geometry<i32>,
-    pub properties: Properties,
+    pub properties: Rc<Properties>,
 }
 
 impl Serialize for Feature {
@@ -81,12 +82,12 @@ impl Serialize for Feature {
 }
 
 impl Feature {
-    pub fn new(geometry: Geometry<i32>, properties: Properties) -> Self {
+    pub fn new(geometry: Geometry<i32>, properties: Rc<Properties>) -> Self {
         Feature{ geometry: geometry, properties: properties }
     }
 
     pub fn from_geometry(geometry: Geometry<i32>) -> Self {
-        Feature::new(geometry, Properties::new())
+        Feature::new(geometry, Rc::new(Properties::new()))
     }
 
     pub fn get_point<'a>(&'a self) -> Option<Point<i32>> {
@@ -110,7 +111,7 @@ impl Feature {
     }
 
     pub fn set<K: Into<String>, V: Into<Value>>(mut self, k: K, v: V) -> Self {
-        self.properties.insert(k, v);
+        Rc::get_mut(&mut self.properties).unwrap().insert(k, v);
         self
     }
 
@@ -500,7 +501,7 @@ fn pbflayer_to_layer(mut layer: vector_tile::Tile_Layer) -> Layer {
         // otherwise
         let properties: HashMap<String, Value> = f.take_tags().chunks(2).map(|kv: &[u32]| (keys[kv[0] as usize].clone(), values[kv[1] as usize].clone().into())).collect();
 
-        Feature { properties: properties.into(), geometry: decode_geom(f.get_geometry(), &f.get_field_type()) }
+        Feature { properties: Rc::new(properties.into()), geometry: decode_geom(f.get_geometry(), &f.get_field_type()) }
     }).collect();
     
     Layer{ name: name, extent: extent, features: features }
@@ -1004,7 +1005,7 @@ mod test {
         assert_eq!(t.layers[0].name, "poop");
         assert_eq!(t.layers[0].extent, 4096);
 
-        t.add_feature("poop", Feature::new(Geometry::Point(Point::new(10, 10)), Properties::new().set("name", "fart")));
+        t.add_feature("poop", Feature::new(Geometry::Point(Point::new(10, 10)), Rc::new(Properties::new().set("name", "fart"))));
     }
 
     #[test]
