@@ -73,7 +73,7 @@ impl Serialize for Feature {
         where S: Serializer
     {
         let mut map = serializer.serialize_map(Some(2)).unwrap();
-        map.serialize_entry("properties", &self.properties).unwrap();
+        map.serialize_entry("properties", &*self.properties).unwrap();
         map.serialize_entry("geometry", &false).unwrap();
         
         map.end()
