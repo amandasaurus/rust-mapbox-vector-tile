@@ -8,10 +8,10 @@ license = "AGPL-3.0"
 
 [dependencies]
 geo = { git = "https://github.com/rory/rust-geo.git", branch = "rory-everything" }
-protobuf = "*"
-flate2 = "*"
-slippy-map-tiles = "*"
-serde = "*"
-serde_derive = "*"
-serde_json = "*"
-geojson = "*"
+protobuf = "1.4.3"
+flate2 = "1.0.1"
+slippy-map-tiles = "0.14.0"
+serde = "1.0.27"
+serde_derive = "1.0.27"
+serde_json = "1.0.10"
+geojson = "0.9.1"
