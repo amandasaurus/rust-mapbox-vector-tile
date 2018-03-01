@@ -2,6 +2,9 @@
 name = "mapbox_vector_tile"
 version = "0.1.0"
 authors = ["Rory McCann <rory@technomancy.org>"]
+description = "Work with Slippy map tile names, found in OpenStreetMap"
+keywords = ["openstreetmap", "osm", "vector-tiles", "geo"]
+license = "AGPL-3.0"
 
 [dependencies]
 geo = { git = "https://github.com/rory/rust-geo.git", branch = "rory-everything" }
