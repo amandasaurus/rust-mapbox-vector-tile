@@ -1,0 +1,4 @@
+= mapbox_vector_tile : Read & Write MVT files
+
+
+Copyright under the GNU Affero GPL v3 (or later) (see the file link:LICENCE[LICENCE])
