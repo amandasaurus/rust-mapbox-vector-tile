@@ -9,7 +9,7 @@ repository = "https://github.com/rory/rust-mapbox-vector-tile"
 homepage = "https://github.com/rory/rust-mapbox-vector-tile"
 
 [dependencies]
-geo = { git = "https://github.com/rory/rust-geo.git", branch = "rory-everything" }
+geo = "0.7.1"
 protobuf = "1.4.3"
 flate2 = "1.0.1"
 slippy-map-tiles = "0.14.0"
