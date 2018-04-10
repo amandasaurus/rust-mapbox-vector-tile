@@ -7,6 +7,8 @@ extern crate slippy_map_tiles;
 #[macro_use]
 extern crate serde_derive;
 
+#[macro_use] extern crate failure;
+
 extern crate serde;
 extern crate serde_json;
 
@@ -17,6 +19,7 @@ use std::io::Cursor;
 use protobuf::Message;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
+use std::convert::{TryFrom, TryInto};
 
 use std::collections::{HashMap, HashSet, BTreeMap};
 pub use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon};
@@ -25,11 +28,23 @@ use geo::winding_order::{Winding, WindingOrder};
 use flate2::write::GzEncoder;
 use flate2::read::GzDecoder;
 use flate2::Compression;
+use failure::Error;
 
 use serde::ser::{Serialize, Serializer, SerializeMap};
 
-
 mod vector_tile;
+
+/// What should be done if, when parsing a file, there's an invalid geometry, i.e. the MVT file is
+/// invalid
+#[derive(Debug,PartialEq,Serialize,Clone,Copy)]
+pub enum InvalidGeometryTactic {
+    /// If one geom is invalid, the whole tile is viewed as invalid and not returned.
+    StopProcessing,
+
+    /// The feature with invalid geometry is ignored and skipped. The rest of the features in the
+    /// file (with valid geometries) are included.
+    DropBrokenFeature,
+}
 
 #[derive(Debug,PartialEq,Serialize,Clone)]
 pub struct Properties(pub HashMap<String, Value>);
@@ -364,26 +379,37 @@ impl Tile {
 
     }
 
-    pub fn from_file(filename: &str) -> Tile {
-        let mut file = File::open(filename).unwrap();
+    /// Read compressed .mvt file and parse it
+    pub fn from_file(filename: &str) -> Result<Tile, Error> {
+        let mut file = File::open(filename)?;
         let mut contents: Vec<u8> = Vec::new();
-        file.read_to_end(&mut contents).unwrap();
+        file.read_to_end(&mut contents)?;
         // FIXME if the gzip file is empty then return something sensible
 
         Tile::from_compressed_bytes(&contents)
     }
 
-    pub fn from_compressed_bytes(bytes: &[u8]) -> Tile {
+    /// Try to parse a VT from some (gzip) compressed bytes
+    pub fn from_compressed_bytes(bytes: &[u8]) -> Result<Tile, Error> {
+        Tile::from_compressed_bytes_with_tactic(bytes, InvalidGeometryTactic::StopProcessing)
+    }
+
+    pub fn from_compressed_bytes_with_tactic(bytes: &[u8], invalid_geom_tactic: InvalidGeometryTactic) -> Result<Tile, Error> {
         let mut decompressor = GzDecoder::new(bytes);
         let mut contents: Vec<u8> = Vec::new();
         decompressor.read_to_end(&mut contents).unwrap();
 
-        Tile::from_uncompressed_bytes(&contents)
+        Tile::from_uncompressed_bytes_with_tactic(&contents, invalid_geom_tactic)
     }
 
-    pub fn from_uncompressed_bytes(bytes: &[u8]) -> Tile {
-        let mut tile: vector_tile::Tile = protobuf::parse_from_bytes(&bytes).unwrap();
-        pbftile_to_tile(tile)
+    /// Try to parse a VT from some uncompressed bytes. i.e. raw protobuf
+    pub fn from_uncompressed_bytes(bytes: &[u8]) -> Result<Tile, Error> {
+        Tile::from_uncompressed_bytes_with_tactic(bytes, InvalidGeometryTactic::StopProcessing)
+    }
+
+    pub fn from_uncompressed_bytes_with_tactic(bytes: &[u8], invalid_geom_tactic: InvalidGeometryTactic) -> Result<Tile, Error> {
+        let mut tile: vector_tile::Tile = protobuf::parse_from_bytes(&bytes)?;
+        pbftile_to_tile(tile, invalid_geom_tactic)
     }
 
     /// Construct a tile from some layers
@@ -525,26 +551,41 @@ impl Into<vector_tile::Tile_Value> for Value {
 }
 
 // FIXME use std::convert types, but it needs the mut
-fn pbftile_to_tile(mut tile: vector_tile::Tile) -> Tile {
-    Tile{ layers: tile.take_layers().into_iter().map(|l| pbflayer_to_layer(l)).collect() }
+fn pbftile_to_tile(mut tile: vector_tile::Tile, invalid_geom_tactic: InvalidGeometryTactic) -> Result<Tile, Error> {
+    Ok(Tile{ layers: tile.take_layers().into_iter().map(|l| pbflayer_to_layer(l, invalid_geom_tactic)).collect::<Result<Vec<_>, Error>>()? })
 }
 
-fn pbflayer_to_layer(mut layer: vector_tile::Tile_Layer) -> Layer {
+fn pbflayer_to_layer(mut layer: vector_tile::Tile_Layer, invalid_geom_tactic: InvalidGeometryTactic) -> Result<Layer, Error> {
     let name = layer.take_name();
     let extent = layer.get_extent();
     let features = layer.take_features();
     let keys = layer.take_keys();
     let values = layer.take_values();
 
-    let features: Vec<Feature> = features.into_iter().map(|mut f| {
+    // TODO this is a filter in a ? so Some(Err(_)) is a bit messy
+    let features: Vec<Feature> = features.into_iter().filter_map(|mut f| {
         // TODO do we need the clone on values? I get a 'cannot move out of indexed context'
         // otherwise
         let properties: HashMap<String, Value> = f.take_tags().chunks(2).map(|kv: &[u32]| (keys[kv[0] as usize].clone(), values[kv[1] as usize].clone().into())).collect();
 
-        Feature { properties: Rc::new(properties.into()), geometry: decode_geom(f.get_geometry(), &f.get_field_type()) }
-    }).collect();
+        match decode_geom(f.get_geometry(), &f.get_field_type()) {
+            Ok(geom) => {
+                Some(Ok(Feature { properties: Rc::new(properties.into()), geometry: geom }))
+            },
+            Err(e) => {
+                match invalid_geom_tactic {
+                    InvalidGeometryTactic::StopProcessing => {
+                        Some(Err(e))
+                    },
+                    InvalidGeometryTactic::DropBrokenFeature => {
+                        None
+                    }
+                }
+            }
+        }
+    }).collect::<Result<Vec<_>, Error>>()?;
     
-    Layer{ name: name, extent: extent, features: features }
+    Ok(Layer{ name: name, extent: extent, features: features })
 
 }
 
@@ -636,9 +677,9 @@ impl From<Vec<u32>> for DrawingCommands {
     }
 }
 
-fn decode_geom(data: &[u32], geom_type: &vector_tile::Tile_GeomType) -> Geometry<i32> {
+fn decode_geom(data: &[u32], geom_type: &vector_tile::Tile_GeomType) -> Result<Geometry<i32>, Error> {
     let cmds: DrawingCommands = data.into();
-    cmds.into()
+    cmds.try_into()
 }
 
 fn deduce_geom_type(cmds: &DrawingCommands) -> vector_tile::Tile_GeomType {
@@ -658,8 +699,10 @@ fn deduce_geom_type(cmds: &DrawingCommands) -> vector_tile::Tile_GeomType {
 
 }
 
-impl From<DrawingCommands> for Geometry<i32> {
-    fn from(commands: DrawingCommands) -> Geometry<i32> {
+impl TryFrom<DrawingCommands> for Geometry<i32> {
+    type Error = Error;
+
+    fn try_from(commands: DrawingCommands) -> Result<Geometry<i32>, Self::Error> {
         let geom_type = deduce_geom_type(&commands);
 
         match geom_type {
@@ -672,7 +715,7 @@ impl From<DrawingCommands> for Geometry<i32> {
                         if points.len() == 0 {
                             unreachable!()
                         } else if points.len() == 1 {
-                            Geometry::Point(Point::new(points[0].0 as i32, points[0].1 as i32))
+                            Ok(Geometry::Point(Point::new(points[0].0 as i32, points[0].1 as i32)))
                         } else if points.len() > 1 {
                             let mut cx = 0;
                             let mut cy = 0;
@@ -682,7 +725,7 @@ impl From<DrawingCommands> for Geometry<i32> {
                                 cy = cy + p.1;
                                 new_points.push(Point::new(cx as i32, cy as i32));
                             }
-                            Geometry::MultiPoint(MultiPoint(new_points))
+                            Ok(Geometry::MultiPoint(MultiPoint(new_points)))
                         } else {
                             unreachable!();
                         } 
@@ -726,16 +769,18 @@ impl From<DrawingCommands> for Geometry<i32> {
 
                 assert!(lines.len() > 0);
                 if lines.len() == 1 {
-                    Geometry::LineString(lines.remove(0))
+                    Ok(Geometry::LineString(lines.remove(0)))
                 } else {
-                    Geometry::MultiLineString(MultiLineString(lines))
+                    Ok(Geometry::MultiLineString(MultiLineString(lines)))
                 }
 
             },
             vector_tile::Tile_GeomType::POLYGON => {
                 let mut cx = 0;
                 let mut cy = 0;
-                assert_eq!(commands.0.len() % 3, 0);
+                if commands.0.len() % 3 != 0 {
+                    return Err(format_err!("Drawing commands are invalid. There are {} commands, and it must be a multiple of 3: {:?}", commands.0.len(), commands));
+                }
                 let mut rings  = Vec::with_capacity(commands.0.len()/3);
                 for cmds in commands.0.chunks(3) {
                     assert_eq!(cmds.len(), 3);
@@ -751,7 +796,12 @@ impl From<DrawingCommands> for Geometry<i32> {
                         assert!(false);
                     }
                     if let DrawingCommand::LineTo(ref points) = cmds[1] {
-                        assert!(points.len() > 1);
+                        if points.len() <= 1 {
+                            // I have seen live data which is MoveTo([(77, -11)]), LineTo([(0,
+                            // 0)]), ClosePath, that's invalid MVT data. "continue" means don't add
+                            // linestring_points to rings, meaning this ring will be skipped
+                            return Err(format_err!("Invalid number of points for a polygon, got {} and we need > 1: cmds: {:?}", points.len(), cmds));
+                        }
                         linestring_points.reserve(points.len());
                         for &(dx, dy) in points.into_iter() {
                             cx += dx;
@@ -759,7 +809,7 @@ impl From<DrawingCommands> for Geometry<i32> {
                             linestring_points.push(Point::new(cx as i32, cy as i32));
                         }
                     } else {
-                        assert!(false);
+                        return Err(format_err!("Expecting a LineTo command, got a {:?}. All cmds {:?}", cmds[1], cmds));
                     }
                     if let DrawingCommand::ClosePath = cmds[2] {
                         // FIXME add first/last point
@@ -771,7 +821,9 @@ impl From<DrawingCommands> for Geometry<i32> {
                     }
                 }
 
-                assert!(rings.len() > 0);
+                if rings.len() == 0 {
+                    return Err(format_err!("No valid rings created"));
+                }
                 let mut polygons = Vec::new();
                 loop {
                     if rings.len() == 0 {
@@ -790,13 +842,16 @@ impl From<DrawingCommands> for Geometry<i32> {
                     }
                     polygons.push(Polygon::new(exterior_ring, inner_rings));
                 }
-                assert!(polygons.len() > 0);
+                if polygons.len() == 0 {
+                    return Err(format_err!("No valid polygons created"));
+                }
 
                 if polygons.len() == 1 {
                     // FIXME spec diff?
-                    Geometry::Polygon(polygons.remove(0))
+                    Ok(Geometry::Polygon(polygons.remove(0)))
                 } else {
-                    Geometry::MultiPolygon(MultiPolygon(polygons))
+                    // if polygons.len() == 0 this will be triggered. probably not the best
+                    Ok(Geometry::MultiPolygon(MultiPolygon(polygons)))
                 }
             },
             vector_tile::Tile_GeomType::UNKNOWN => unreachable!(),
@@ -1071,7 +1126,7 @@ mod test {
         let bytes: Vec<u32> = vec![9, 50, 34];
         let dc: DrawingCommands = bytes.into();
         assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(25, 17)])]));
-        let p: Geometry<i32> = dc.into();
+        let p: Geometry<i32> = dc.try_into().unwrap();
         assert_eq!(p, Geometry::Point(Point::new(25, 17)));
     }
 
@@ -1080,7 +1135,7 @@ mod test {
         let ls = LineString(vec![Point::new(2, 2), Point::new(2, 10), Point::new(10, 10)]);
         let dc: DrawingCommands = (&ls).into();
         assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(2, 2)]), DrawingCommand::LineTo(vec![(0, 8), (8, 0)])]));
-        let bytes: Vec<u32> = dc.into();
+        let bytes: Vec<u32> = dc.try_into().unwrap();
         assert_eq!(bytes, vec![9, 4, 4, 18, 0, 16, 16, 0]);
     }
 
@@ -1129,7 +1184,7 @@ mod test {
     fn decode_multipoint() {
         let bytes: Vec<u32> = vec![17, 10, 14, 3, 9];
         let dc: DrawingCommands = bytes.into();
-        let mp: Geometry<i32> = dc.into();
+        let mp: Geometry<i32> = dc.try_into().unwrap();
         assert_eq!(mp, Geometry::MultiPoint(MultiPoint(vec![Point::new(5, 7), Point::new(3, 2)])));
     }
 
