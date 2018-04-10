@@ -19,7 +19,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use std::collections::{HashMap, HashSet, BTreeMap};
-use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon};
+pub use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon};
 use geo::orient::{Orient, Direction};
 use geo::winding_order::{Winding, WindingOrder};
 use flate2::write::GzEncoder;
