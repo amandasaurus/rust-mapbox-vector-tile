@@ -386,6 +386,11 @@ impl Tile {
         pbftile_to_tile(tile)
     }
 
+    /// Construct a tile from some layers
+    pub fn from_layers(layers: Vec<Layer>) -> Self {
+        Tile{ layers: layers }
+    }
+
     pub fn set_locations(&mut self, geometry_tile: &slippy_map_tiles::Tile) {
         for l in self.layers.iter_mut() {
             l.set_locations(&geometry_tile);
