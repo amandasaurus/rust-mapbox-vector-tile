@@ -60,6 +60,11 @@ impl Properties {
         self.insert(k, v);
         self
     }
+
+    /// Remove, and return, the value for key `k`. Returns None if the key is not present.
+    pub fn remove(&mut self, k: &str) -> Option<Value>  {
+        self.0.remove(k)
+    }
 }
 
 /// A single feature. It has a geometry and some properties (i.e. tags)
