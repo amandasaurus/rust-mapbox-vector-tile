@@ -62,9 +62,14 @@ impl Properties {
     }
 }
 
+/// A single feature. It has a geometry and some properties (i.e. tags)
 #[derive(Debug,PartialEq,Clone)]
 pub struct Feature {
+
+    /// The geomtry
     pub geometry: geo::Geometry<i32>,
+
+    /// The properties. Uses an `Rc` because properties can be shared between tiles.
     pub properties: Rc<Properties>,
 }
 
@@ -82,10 +87,12 @@ impl Serialize for Feature {
 }
 
 impl Feature {
+    /// Create a Feature with this `geometry` and these `properties`
     pub fn new(geometry: Geometry<i32>, properties: Rc<Properties>) -> Self {
         Feature{ geometry: geometry, properties: properties }
     }
 
+    /// Create a feature (with no propertes) from this geometry.
     pub fn from_geometry(geometry: Geometry<i32>) -> Self {
         Feature::new(geometry, Rc::new(Properties::new()))
     }
@@ -110,6 +117,9 @@ impl Feature {
         };
     }
 
+    /// Sets a property for this feature. It will panic if the properties are shared with other
+    /// features. Don't call this if that could happen.
+    /// Consumes the feature and returns it. Useful for Building pattern
     pub fn set<K: Into<String>, V: Into<Value>>(mut self, k: K, v: V) -> Self {
         Rc::get_mut(&mut self.properties).unwrap().insert(k, v);
         self
@@ -117,6 +127,7 @@ impl Feature {
 
 }
 
+/// Convert a geometry to a feature.
 impl From<Geometry<i32>> for Feature {
     fn from(geom: Geometry<i32>) -> Feature {
         Feature::from_geometry(geom)
@@ -124,22 +135,31 @@ impl From<Geometry<i32>> for Feature {
 }
 
 
+/// A Layer in a vector tile
 #[derive(Debug,PartialEq,Serialize,Clone)]
 pub struct Layer {
+    /// The layer's name
     pub name: String,
+
+    /// The features in this layer
     pub features: Vec<Feature>,
+
+    /// The "extent" of this layer. Usualyy 4096 is used.
     pub extent: u32,
 }
 
 impl Layer {
-    pub fn new(name: String) -> Self {
-        Layer{ name: name, features: Vec::new(), extent: 4096 }
+    /// Create an empty layer with this name (and 4096 extent)
+    pub fn new<S: Into<String>>(name: S) -> Self {
+        Layer{ name: name.into(), features: Vec::new(), extent: 4096 }
     }
 
+    /// Construct layer with this name and extent
     pub fn new_and_extent(name: String, extent: u32) -> Self {
         Layer{ name: name, features: Vec::new(), extent: extent }
     }
 
+    /// Move all the geometries in this layer so that it's at this `geometry_tile`.
     pub fn set_locations(&mut self, geometry_tile: &slippy_map_tiles::Tile) {
         let extent = self.extent as i32;
         let top = geometry_tile.top() as i32;
@@ -158,15 +178,18 @@ impl Layer {
         
     }
 
+    /// Add a feature to this layer.
     pub fn add_feature(&mut self, f: Feature) {
         // TODO error checking for non-integer geom?
         self.features.push(f);
     }
 
+    /// True iff this layer has no features
     pub fn is_empty(&self) -> bool {
         self.features.is_empty()
     }
 
+    /// Encode this layer to the `writer`.
     pub fn write_to<W: std::io::Write>(self, writer: &mut W)  {
         if self.is_empty() {
             return;
@@ -178,6 +201,7 @@ impl Layer {
         cos.flush().unwrap();
     }
 
+    /// Encode this layer into bytes.
     pub fn to_bytes(self) -> Vec<u8> {
         let mut res = Vec::new();
         self.write_to(&mut res);
@@ -198,6 +222,7 @@ impl<'a> From<&'a str> for Layer {
     }
 }
 
+/// Internally used to keep track of tags/values
 #[derive(Debug)]
 struct TagIndex<T>
     where T: Sized
@@ -312,16 +337,21 @@ impl Into<vector_tile::Tile_Layer> for Layer {
     }
 }
 
+/// One Vector Tile.
 #[derive(Debug,PartialEq,Serialize,Clone)]
 pub struct Tile {
+
+    /// The layers in this vector tile
     pub layers: Vec<Layer>,
 }
 
 impl Tile {
+    /// Construct an empty layer
     pub fn new() -> Self {
         Tile{ layers: Vec::new() }
     }
 
+    /// Add a layer to this tile, at the end.
     pub fn add_layer<L: Into<Layer>>(&mut self, l: L) {
         let l = l.into();
         // TODO check for duplicate layer name
