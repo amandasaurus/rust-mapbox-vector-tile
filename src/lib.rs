@@ -436,11 +436,10 @@ impl Tile {
     }
 
     pub fn to_compressed_bytes(self) -> Vec<u8> {
-        let bytes = self.to_bytes();
-        let mut compressor = GzEncoder::new(Vec::with_capacity(bytes.len()/2), Compression::default());
+        let mut compressor = GzEncoder::new(Vec::new(), Compression::none());
 
         // TODO this should return a Result, and we can then do something better than an assert
-        compressor.write_all(&bytes).unwrap();
+        self.write_to(&mut compressor);
         compressor.flush().unwrap();
         let new_bytes = compressor.finish().unwrap();
 
