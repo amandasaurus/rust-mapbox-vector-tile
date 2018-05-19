@@ -46,40 +46,23 @@ pub enum InvalidGeometryTactic {
     DropBrokenFeature,
 }
 
-#[derive(Debug,PartialEq,Serialize,Clone)]
-pub struct Properties(pub HashMap<String, Value>);
-
-//impl From<HashMap<String, Value>> for Properties {
-//    fn from(x: HashMap<String, Value>) -> Properties { Properties(x) }
-//}
-
-
-impl<V> From<HashMap<String, V>> for Properties where V: Into<Value> {
-    fn from(x: HashMap<String, V>) -> Properties {
-        // FIXME is this the most effcient with doesn't mess with duplicating memory
-        let x: HashMap<String, Value>  = x.into_iter().map(|(k, v)| (k, v.into())).collect();
-        Properties(x)
-    }
-}
+#[derive(Debug,PartialEq,Clone)]
+pub struct Properties(pub HashMap<Rc<String>, Value>);
 
 impl Properties {
     pub fn new() -> Self {
         Properties(HashMap::new())
     }
 
-    pub fn insert<K: Into<String>, V: Into<Value>>(&mut self, k: K, v: V)  {
+    pub fn insert<K: Into<Rc<String>>, V: Into<Value>>(&mut self, k: K, v: V)  {
         self.0.insert(k.into(), v.into());
     }
 
-    pub fn set<K: Into<String>, V: Into<Value>>(mut self, k: K, v: V) -> Self {
+    pub fn set<K: Into<Rc<String>>, V: Into<Value>>(mut self, k: K, v: V) -> Self {
         self.insert(k, v);
         self
     }
 
-    /// Remove, and return, the value for key `k`. Returns None if the key is not present.
-    pub fn remove(&mut self, k: &str) -> Option<Value>  {
-        self.0.remove(k)
-    }
 }
 
 /// A single feature. It has a geometry and some properties (i.e. tags)
@@ -91,19 +74,6 @@ pub struct Feature {
 
     /// The properties. Uses an `Rc` because properties can be shared between tiles.
     pub properties: Rc<Properties>,
-}
-
-impl Serialize for Feature {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where S: Serializer
-    {
-        let mut map = serializer.serialize_map(Some(2)).unwrap();
-        map.serialize_entry("properties", &*self.properties).unwrap();
-        map.serialize_entry("geometry", &false).unwrap();
-        
-        map.end()
-
-    }
 }
 
 impl Feature {
@@ -140,7 +110,7 @@ impl Feature {
     /// Sets a property for this feature. It will panic if the properties are shared with other
     /// features. Don't call this if that could happen.
     /// Consumes the feature and returns it. Useful for Building pattern
-    pub fn set<K: Into<String>, V: Into<Value>>(mut self, k: K, v: V) -> Self {
+    pub fn set<K: Into<Rc<String>>, V: Into<Value>>(mut self, k: K, v: V) -> Self {
         Rc::get_mut(&mut self.properties).unwrap().insert(k, v);
         self
     }
@@ -156,7 +126,7 @@ impl From<Geometry<i32>> for Feature {
 
 
 /// A Layer in a vector tile
-#[derive(Debug,PartialEq,Serialize,Clone)]
+#[derive(Debug,PartialEq,Clone)]
 pub struct Layer {
     /// The layer's name
     pub name: String,
@@ -358,7 +328,7 @@ impl Into<vector_tile::Tile_Layer> for Layer {
 }
 
 /// One Vector Tile.
-#[derive(Debug,PartialEq,Serialize,Clone)]
+#[derive(Debug,PartialEq,Clone)]
 pub struct Tile {
 
     /// The layers in this vector tile
@@ -462,10 +432,6 @@ impl Tile {
         file.write_all(&self.to_compressed_bytes()).unwrap();
     }
 
-    pub fn to_json(&self) -> String {
-        serde_json::to_string(&self).unwrap()
-    }
-
     fn is_empty(&self) -> bool {
         self.layers.iter().all(|l| l.is_empty())
     }
@@ -486,9 +452,9 @@ impl Into<vector_tile::Tile> for Tile {
     }
 }
 
-#[derive(Debug,Clone,PartialEq,PartialOrd,Serialize)]
+#[derive(Debug,Clone,PartialEq,PartialOrd)]
 pub enum Value {
-    String(String),
+    String(Rc<String>),
     Float(f32),
     Double(f64),
     Int(i64),
@@ -498,8 +464,8 @@ pub enum Value {
     Unknown,
 }
 
-impl From<String> for Value { fn from(x: String) -> Value { Value::String(x) } }
-impl<'a> From<&'a str> for Value { fn from(x: &str) -> Value { Value::String(x.to_owned()) } }
+impl From<String> for Value { fn from(x: String) -> Value { Value::String(Rc::new(x)) } }
+impl<'a> From<&'a str> for Value { fn from(x: &str) -> Value { Value::String(Rc::new(x.to_owned())) } }
 
 impl From<f32> for Value { fn from(x: f32) -> Value { Value::Float(x) } }
 impl From<f64> for Value { fn from(x: f64) -> Value { Value::Double(x) } }
@@ -511,7 +477,7 @@ impl From<bool> for Value { fn from(x: bool) -> Value { Value::Boolean(x) } }
 impl From<vector_tile::Tile_Value> for Value {
     fn from(val: vector_tile::Tile_Value) -> Value {
         if val.has_string_value() {
-            Value::String(val.get_string_value().into())
+            Value::String(Rc::new(val.get_string_value().into()))
         } else if val.has_float_value() {
             Value::Float(val.get_float_value())
         } else if val.has_double_value() {
@@ -534,7 +500,7 @@ impl Into<vector_tile::Tile_Value> for Value {
     fn into(self) -> vector_tile::Tile_Value {
         let mut res = vector_tile::Tile_Value::new();
         match self {
-            Value::String(s) => res.set_string_value(s),
+            Value::String(s) => res.set_string_value(Rc::try_unwrap(s).unwrap_or_else(|s| (&*s).clone())),
             Value::Float(s) => res.set_float_value(s),
             Value::Double(s) => res.set_double_value(s),
             Value::Int(s) => res.set_int_value(s),
@@ -565,11 +531,11 @@ fn pbflayer_to_layer(mut layer: vector_tile::Tile_Layer, invalid_geom_tactic: In
     let features: Vec<Feature> = features.into_iter().filter_map(|mut f| {
         // TODO do we need the clone on values? I get a 'cannot move out of indexed context'
         // otherwise
-        let properties: HashMap<String, Value> = f.take_tags().chunks(2).map(|kv: &[u32]| (keys[kv[0] as usize].clone(), values[kv[1] as usize].clone().into())).collect();
+        let properties: HashMap<Rc<String>, Value> = f.take_tags().chunks(2).map(|kv: &[u32]| (Rc::new(keys[kv[0] as usize].clone()), values[kv[1] as usize].clone().into())).collect();
 
         match decode_geom(f.get_geometry(), &f.get_field_type()) {
             Ok(geom) => {
-                Some(Ok(Feature { properties: Rc::new(properties.into()), geometry: geom }))
+                Some(Ok(Feature { properties: Rc::new(Properties(properties)), geometry: geom }))
             },
             Err(e) => {
                 match invalid_geom_tactic {
