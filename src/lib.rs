@@ -1,3 +1,4 @@
+#![feature(try_from)]
 #![allow(unused_variables,dead_code,unused_mut,unused_imports)]
 extern crate geo;
 extern crate protobuf;
