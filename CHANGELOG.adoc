@@ -1,0 +1,11 @@
+= Changelog
+
+== v0.3.0
+
+ * Performance improvements from reducing gzip compression
+ * Use `Rc<String>` more often to allow users to reduce memory usage
+
+== v0.2.0
+
+ * Actual error handling, instead of panic when invalid geometries are
+   encountered
