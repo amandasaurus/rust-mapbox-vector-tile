@@ -23,7 +23,7 @@ use std::rc::Rc;
 use std::convert::{TryFrom, TryInto};
 
 use std::collections::{HashMap, HashSet, BTreeMap};
-pub use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon};
+pub use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, Coordinate};
 use geo::orient::{Orient, Direction};
 use geo::winding_order::{Winding, WindingOrder};
 use flate2::write::GzEncoder;
@@ -714,7 +714,7 @@ impl TryFrom<DrawingCommands> for Geometry<i32> {
                         let (dx, dy) = points[0];
                         cx += dx;
                         cy += dy;
-                        linestring_points.push(Point::new(cx as i32, cy as i32));
+                        linestring_points.push(Coordinate{x: cx as i32, y: cy as i32});
                     } else {
                         assert!(false);
                     }
@@ -724,7 +724,7 @@ impl TryFrom<DrawingCommands> for Geometry<i32> {
                         for &(dx, dy) in points.into_iter() {
                             cx += dx;
                             cy += dy;
-                            linestring_points.push(Point::new(cx as i32, cy as i32));
+                            linestring_points.push(Coordinate{ x: cx as i32, y: cy as i32});
                         }
                     } else {
                         assert!(false);
@@ -757,7 +757,7 @@ impl TryFrom<DrawingCommands> for Geometry<i32> {
                         let (dx, dy) = points[0];
                         cx += dx;
                         cy += dy;
-                        linestring_points.push(Point::new(cx as i32, cy as i32));
+                        linestring_points.push(Coordinate{ x:cx as i32, y: cy as i32});
                     } else {
                         assert!(false);
                     }
@@ -772,7 +772,7 @@ impl TryFrom<DrawingCommands> for Geometry<i32> {
                         for &(dx, dy) in points.into_iter() {
                             cx += dx;
                             cy += dy;
-                            linestring_points.push(Point::new(cx as i32, cy as i32));
+                            linestring_points.push(Coordinate{ x:cx as i32, y: cy as i32});
                         }
                     } else {
                         return Err(format_err!("Expecting a LineTo command, got a {:?}. All cmds {:?}", cmds[1], cmds));
@@ -825,9 +825,9 @@ impl TryFrom<DrawingCommands> for Geometry<i32> {
     }
 }
 
-fn move_cursor(current: &mut (i32, i32), point: &Point<i32>) -> (i32, i32) {
-    let x = point.x();
-    let y = point.y();
+fn move_cursor(current: &mut (i32, i32), point: &Coordinate<i32>) -> (i32, i32) {
+    let x = point.x;
+    let y = point.y;
 
     let dx = x - current.0;
     let dy = y - current.1;
@@ -851,7 +851,7 @@ impl<'a> From<&'a MultiPoint<i32>> for DrawingCommands {
         let mut offsets = Vec::with_capacity(mp.0.len());
         let mut cursor = (0, 0);
         for p in mp.0.iter() {
-            offsets.push(move_cursor(&mut cursor, &p));
+            offsets.push(move_cursor(&mut cursor, &p.0));
         }
 
         DrawingCommands(vec![DrawingCommand::MoveTo(offsets)])
