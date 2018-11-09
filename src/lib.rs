@@ -1,4 +1,3 @@
-#![feature(try_from)]
 #![allow(unused_variables,dead_code,unused_mut,unused_imports)]
 extern crate geo;
 extern crate protobuf;
@@ -20,7 +19,6 @@ use std::io::Cursor;
 use protobuf::Message;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
-use std::convert::{TryFrom, TryInto};
 
 use std::collections::{HashMap, HashSet, BTreeMap};
 pub use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, Coordinate};
@@ -592,83 +590,9 @@ impl DrawingCommand {
 #[derive(Debug,Clone,PartialEq,Eq)]
 pub struct DrawingCommands(pub Vec<DrawingCommand>);
 
-impl<'a> From<&'a [u32]> for DrawingCommands {
-    fn from(data: &[u32]) -> DrawingCommands {
-        let mut res = Vec::new();
-
-        let mut idx = 0;
-        loop {
-            if idx >= data.len() {
-                break;
-            }
-
-            let command = data[idx];
-            idx += 1;
-            let id = command & 0x7;
-            let count = command >> 3;
-
-            // Only MoveTo and LineTo take params
-            let mut params = Vec::with_capacity(count as usize);
-            if id == 1 || id == 2 {
-                for _ in 0..count {
-                    // XXX what about overflows here??
-                    let value = data[idx] as i32;
-                    idx += 1;
-                    let d_x = (value >> 1) ^ (-(value & 1));
-
-                    // XXX what about overflows here??
-                    let value = data[idx] as i32;
-                    idx += 1;
-                    let d_y = (value >> 1) ^ (-(value & 1));
-
-                    params.push((d_x, d_y));
-                }
-            }
-
-            res.push(match id {
-                1 => DrawingCommand::MoveTo(params),
-                2 => DrawingCommand::LineTo(params),
-                7 => DrawingCommand::ClosePath,
-                _ => unreachable!(),
-            });
-        }
-
-        DrawingCommands(res)
-    }
-}
-
-impl From<Vec<u32>> for DrawingCommands {
-    fn from(data: Vec<u32>) -> DrawingCommands {
-        data.as_slice().into()
-    }
-}
-
-fn decode_geom(data: &[u32], geom_type: &vector_tile::Tile_GeomType) -> Result<Geometry<i32>, Error> {
-    let cmds: DrawingCommands = data.into();
-    cmds.try_into()
-}
-
-fn deduce_geom_type(cmds: &DrawingCommands) -> vector_tile::Tile_GeomType {
-    let cmds = &cmds.0;
-
-    // There are definitly ways for the input to be invalid where it should return UNKNOWN. e.g.
-    // vec![DrawingCommands::ClosePath] would be POLYGON, but that's not a valid polygon, so it
-    // should be UNKNOWN. But for valid DrawingCommands, it should be accurate.
-
-    if cmds.len() == 1 && cmds[0].is_moveto() {
-        vector_tile::Tile_GeomType::POINT
-    } else if cmds.iter().any(|cmd| cmd.is_closepath()) {
-        vector_tile::Tile_GeomType::POLYGON
-    } else {
-        vector_tile::Tile_GeomType::LINESTRING
-    }
-
-}
-
-impl TryFrom<DrawingCommands> for Geometry<i32> {
-    type Error = Error;
-
-    fn try_from(commands: DrawingCommands) -> Result<Geometry<i32>, Self::Error> {
+impl DrawingCommands {
+    fn try_to_geometry(self) -> Result<Geometry<i32>, Error> {
+        let commands = self;
         let geom_type = deduce_geom_type(&commands);
 
         match geom_type {
@@ -823,6 +747,79 @@ impl TryFrom<DrawingCommands> for Geometry<i32> {
             vector_tile::Tile_GeomType::UNKNOWN => unreachable!(),
         }
     }
+}
+
+impl<'a> From<&'a [u32]> for DrawingCommands {
+    fn from(data: &[u32]) -> DrawingCommands {
+        let mut res = Vec::new();
+
+        let mut idx = 0;
+        loop {
+            if idx >= data.len() {
+                break;
+            }
+
+            let command = data[idx];
+            idx += 1;
+            let id = command & 0x7;
+            let count = command >> 3;
+
+            // Only MoveTo and LineTo take params
+            let mut params = Vec::with_capacity(count as usize);
+            if id == 1 || id == 2 {
+                for _ in 0..count {
+                    // XXX what about overflows here??
+                    let value = data[idx] as i32;
+                    idx += 1;
+                    let d_x = (value >> 1) ^ (-(value & 1));
+
+                    // XXX what about overflows here??
+                    let value = data[idx] as i32;
+                    idx += 1;
+                    let d_y = (value >> 1) ^ (-(value & 1));
+
+                    params.push((d_x, d_y));
+                }
+            }
+
+            res.push(match id {
+                1 => DrawingCommand::MoveTo(params),
+                2 => DrawingCommand::LineTo(params),
+                7 => DrawingCommand::ClosePath,
+                _ => unreachable!(),
+            });
+        }
+
+        DrawingCommands(res)
+    }
+}
+
+impl From<Vec<u32>> for DrawingCommands {
+    fn from(data: Vec<u32>) -> DrawingCommands {
+        data.as_slice().into()
+    }
+}
+
+fn decode_geom(data: &[u32], geom_type: &vector_tile::Tile_GeomType) -> Result<Geometry<i32>, Error> {
+    let cmds: DrawingCommands = data.into();
+    cmds.try_to_geometry()
+}
+
+fn deduce_geom_type(cmds: &DrawingCommands) -> vector_tile::Tile_GeomType {
+    let cmds = &cmds.0;
+
+    // There are definitly ways for the input to be invalid where it should return UNKNOWN. e.g.
+    // vec![DrawingCommands::ClosePath] would be POLYGON, but that's not a valid polygon, so it
+    // should be UNKNOWN. But for valid DrawingCommands, it should be accurate.
+
+    if cmds.len() == 1 && cmds[0].is_moveto() {
+        vector_tile::Tile_GeomType::POINT
+    } else if cmds.iter().any(|cmd| cmd.is_closepath()) {
+        vector_tile::Tile_GeomType::POLYGON
+    } else {
+        vector_tile::Tile_GeomType::LINESTRING
+    }
+
 }
 
 fn move_cursor(current: &mut (i32, i32), point: &Coordinate<i32>) -> (i32, i32) {
@@ -1092,7 +1089,7 @@ mod test {
         let bytes: Vec<u32> = vec![9, 50, 34];
         let dc: DrawingCommands = bytes.into();
         assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(25, 17)])]));
-        let p: Geometry<i32> = dc.try_into().unwrap();
+        let p: Geometry<i32> = dc.try_to_geometry().unwrap();
         assert_eq!(p, Geometry::Point(Point::new(25, 17)));
     }
 
@@ -1101,7 +1098,7 @@ mod test {
         let ls = LineString(vec![Point::new(2, 2), Point::new(2, 10), Point::new(10, 10)]);
         let dc: DrawingCommands = (&ls).into();
         assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(2, 2)]), DrawingCommand::LineTo(vec![(0, 8), (8, 0)])]));
-        let bytes: Vec<u32> = dc.try_into().unwrap();
+        let bytes: Vec<u32> = dc.try_to_geometry().unwrap();
         assert_eq!(bytes, vec![9, 4, 4, 18, 0, 16, 16, 0]);
     }
 
@@ -1150,7 +1147,7 @@ mod test {
     fn decode_multipoint() {
         let bytes: Vec<u32> = vec![17, 10, 14, 3, 9];
         let dc: DrawingCommands = bytes.into();
-        let mp: Geometry<i32> = dc.try_into().unwrap();
+        let mp: Geometry<i32> = dc.try_to_geometry().unwrap();
         assert_eq!(mp, Geometry::MultiPoint(MultiPoint(vec![Point::new(5, 7), Point::new(3, 2)])));
     }
 

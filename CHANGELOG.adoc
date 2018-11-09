@@ -1,5 +1,11 @@
 = Changelog
 
+== Unreleased
+
+ * Refactor to make compilable on stable release channel. Remove `TryFrom`
+   since that's still only availbable on nightly. Call
+   `DrawingCommands::try_to_geometry(x)` to convert to geometry.
+
 == v0.3.0
 
  * Performance improvements from reducing gzip compression
