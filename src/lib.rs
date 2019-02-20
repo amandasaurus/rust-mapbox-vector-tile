@@ -60,7 +60,7 @@ impl Properties {
     }
 
     pub fn set<K: Into<Rc<String>>, V: Into<Value>>(mut self, k: K, v: V) -> Self {
-        self.insert(k, v);
+        self.insert(k.into(), v.into());
         self
     }
 
@@ -1066,16 +1066,16 @@ mod test {
         assert_eq!(t.layers[0].name, "poop");
         assert_eq!(t.layers[0].extent, 4096);
 
-        t.add_feature("poop", Feature::new(Geometry::Point(Point::new(10, 10)), Rc::new(Properties::new().set("name", "fart"))));
+        t.add_feature("poop", Feature::new(Geometry::Point(Point::new(10, 10)), Rc::new(Properties::new().set("name".to_owned(), "fart".to_owned()))));
     }
 
     #[test]
     fn test_properties() {
         let mut p = Properties::new();
-        p.insert("name", "bar");
-        p.insert("visible", false);
+        p.insert("name".to_string(), "bar");
+        p.insert("visible".to_string(), false);
 
-        let p = Properties::new().set("foo", "bar").set("num", 10i64).set("visible", false);
+        let p = Properties::new().set("foo".to_string(), "bar".to_string()).set("num".to_string(), 10i64).set("visible".to_string(), false);
     }
 
     #[test]
@@ -1098,7 +1098,7 @@ mod test {
 
     #[test]
     fn encode_linestring() {
-        let ls = LineString(vec![Point::new(2, 2), Point::new(2, 10), Point::new(10, 10)]);
+        let ls: LineString<_> = vec![(2, 2), (2, 10), (10, 10)].into();
         let dc: DrawingCommands = (&ls).into();
         assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(2, 2)]), DrawingCommand::LineTo(vec![(0, 8), (8, 0)])]));
         let bytes: Vec<u32> = dc.try_into().unwrap();
@@ -1107,7 +1107,7 @@ mod test {
 
     #[test]
     fn encode_polygon() {
-        let ls1 = LineString(vec![Point::new(3, 6), Point::new(8, 12), Point::new(20, 34), Point::new(3, 6)]);
+        let ls1 = vec![(3, 6), (8, 12), (20, 34), (3, 6)].into();
         let poly = Polygon::new(ls1, vec![]);
         let dc: DrawingCommands = (&poly).into();
         assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(3, 6)]), DrawingCommand::LineTo(vec![(5, 6), (12, 22)]), DrawingCommand::ClosePath]));
@@ -1118,9 +1118,9 @@ mod test {
     #[test]
     fn encode_polygon_with_hole() {
         let poly = Polygon::new(
-            LineString(vec![Point::new(11, 11), Point::new(20, 11), Point::new(20, 20), Point::new(11, 20), Point::new(11, 11)]),
+            vec![(11, 11), (20, 11), (20, 20), (11, 20), (11, 11)].into(),
             vec![
-                LineString(vec![Point::new(13, 13), Point::new(13, 17), Point::new(17, 17), Point::new(17, 13), Point::new(13, 13)])
+                vec![(13, 13), (13, 17), (17, 17), (17, 13), (13, 13)].into()
             ]);
 
         let dc: DrawingCommands = (&poly).into();
@@ -1156,8 +1156,8 @@ mod test {
 
     #[test]
     fn encode_multilinestring() {
-        let ls1 = LineString(vec![Point::new(2, 2), Point::new(2, 10), Point::new(10, 10)]);
-        let ls2 = LineString(vec![Point::new(1, 1), Point::new(3, 5)]);
+        let ls1 = vec![(2, 2), (2, 10), (10, 10)].into();
+        let ls2 = vec![(1, 1), (3, 5)].into();
         let mls = MultiLineString(vec![ls1, ls2]);
         let dc: DrawingCommands = (&mls).into();
         assert_eq!(dc, DrawingCommands(vec![DrawingCommand::MoveTo(vec![(2, 2)]), DrawingCommand::LineTo(vec![(0, 8), (8, 0)]), DrawingCommand::MoveTo(vec![(-9, -9)]), DrawingCommand::LineTo(vec![(2, 4)])]));
@@ -1167,11 +1167,11 @@ mod test {
 
     #[test]
     fn encode_multipolygon() {
-        let poly1 = Polygon::new(LineString(vec![Point::new(0, 0), Point::new(10, 0), Point::new(10, 10), Point::new(0, 10), Point::new(0, 0)]), vec![]);
+        let poly1 = Polygon::new(vec![(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)].into(), vec![]);
         let poly2 = Polygon::new(
-            LineString(vec![Point::new(11, 11), Point::new(20, 11), Point::new(20, 20), Point::new(11, 20), Point::new(11, 11)]),
+            vec![(11, 11), (20, 11), (20, 20), (11, 20), (11, 11)].into(),
             vec![
-                LineString(vec![Point::new(13, 13), Point::new(13, 17), Point::new(17, 17), Point::new(17, 13), Point::new(13, 13)])
+                vec![(13, 13), (13, 17), (17, 17), (17, 13), (13, 13)].into()
             ]);
 
         let mp = MultiPolygon(vec![poly1, poly2]);
