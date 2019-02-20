@@ -433,8 +433,27 @@ impl Tile {
         file.write_all(&self.to_compressed_bytes()).unwrap();
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.layers.iter().all(|l| l.is_empty())
+    }
+
+    pub fn get_layer(&self, layer_name: impl AsRef<str>) -> Option<&Layer> {
+        let layer_name: &str = layer_name.as_ref();
+        self.layers.iter().filter(|l| l.name == layer_name).nth(0)
+    }
+
+    pub fn get_layer_mut(&mut self, layer_name: impl AsRef<str>) -> Option<&mut Layer> {
+        let layer_name: &str = layer_name.as_ref();
+        self.layers.iter_mut().filter(|l| l.name == layer_name).nth(0)
+    }
+
+    pub fn remove_layer(&mut self, layer_name: impl AsRef<str>) -> Option<Layer> {
+        let layer_name: &str = layer_name.as_ref();
+        let i = self.layers.iter().enumerate().filter_map(|(i, l)| if l.name == layer_name { Some(i) } else { None }).nth(0);
+        match i {
+            Some(i) => Some(self.layers.remove(i)),
+            None => None,
+        }
     }
 
 }
@@ -1209,5 +1228,34 @@ mod test {
         //let keys: Vec<String> = ti.into_items().collect();
         //assert_eq!(keys, vec!["bar".to_string(), "baz".to_string(), "foo".to_string()]);
     }
+
+    #[test]
+    fn test_get_layers() {
+
+        let mut t = Tile::new();
+        let l1: Layer = Layer::new("fart".to_string());
+        let l2: Layer = "hello".into();
+
+        assert_eq!(t.layers.len(), 0);
+        t.add_layer("poop");
+        assert_eq!(t.layers.len(), 1);
+        t.add_layer(l1);
+        t.add_layer(l2);
+        assert_eq!(t.layers.len(), 3);
+
+        {
+            let l1: &Layer = t.get_layer("fart").unwrap();
+            assert_eq!(l1.name, "fart");
+        }
+        assert_eq!(t.layers.len(), 3);
+
+        {
+            let l: Layer = t.remove_layer("poop").unwrap();
+            assert_eq!(l.name, "poop");
+        }
+        assert_eq!(t.layers.len(), 2);
+
+    }
+
 
 }
