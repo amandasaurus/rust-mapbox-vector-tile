@@ -23,7 +23,7 @@ use std::rc::Rc;
 use std::convert::{TryFrom, TryInto};
 
 use std::collections::{HashMap, HashSet, BTreeMap};
-pub use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, Coordinate};
+use geo::{Geometry, Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, Coordinate};
 use geo::orient::{Orient, Direction};
 use geo::winding_order::{Winding, WindingOrder};
 use flate2::write::GzEncoder;
