@@ -2,6 +2,9 @@
 
 == Unreleased
 
+ * Refactor to make compilable on stable release channel. Remove `TryFrom`
+   since that's still only availbable on nightly. Call
+   `DrawingCommands::try_to_geometry(x)` to convert to geometry.
  * Upgrade `geo` dependency to 0.12.0
  * `Tile` now has getters/etc for layers based on layer name
 
