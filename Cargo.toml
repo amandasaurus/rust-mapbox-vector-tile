@@ -1,6 +1,6 @@
 [package]
 authors = ["Rory McCann <rory@technomancy.org>"]
-description = "Work with Slippy map tile names, found in OpenStreetMap"
+description = "Work with MVT files"
 homepage = "https://github.com/rory/rust-mapbox-vector-tile"
 keywords = ["openstreetmap", "osm", "vector-tiles", "geo"]
 license = "AGPL-3.0"
