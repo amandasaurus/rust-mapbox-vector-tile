@@ -6,7 +6,7 @@ keywords = ["openstreetmap", "osm", "vector-tiles", "geo"]
 license = "AGPL-3.0"
 name = "mapbox_vector_tile"
 repository = "https://github.com/rory/rust-mapbox-vector-tile"
-version = "0.3.0"
+version = "0.4.0"
 
 [dependencies]
 failure = "0.1.1"
