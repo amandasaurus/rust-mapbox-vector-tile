@@ -926,14 +926,14 @@ impl<'a> From<&'a Polygon<i32>> for DrawingCommands {
         // vtiles have an inverted Y axis (Y is positive down), so this makes it work
         let poly = poly.orient(Direction::Default);
 
-        let mut cmds = Vec::with_capacity(3+3*poly.interiors.len());
+        let mut cmds = Vec::with_capacity(3+3*poly.interiors().len());
         let mut cursor = (0, 0);
 
-        cmds.push(DrawingCommand::MoveTo(vec![move_cursor(&mut cursor, &poly.exterior.0[0])]));
+        cmds.push(DrawingCommand::MoveTo(vec![move_cursor(&mut cursor, &poly.exterior().0[0])]));
 
-        let mut offsets = Vec::with_capacity(poly.exterior.0.len()-1);
-        for (i, p) in poly.exterior.0.iter().enumerate() {
-            if i == 0 || i == poly.exterior.0.len() - 1 {
+        let mut offsets = Vec::with_capacity(poly.exterior().0.len()-1);
+        for (i, p) in poly.exterior().0.iter().enumerate() {
+            if i == 0 || i == poly.exterior().0.len() - 1 {
                 continue;
             }
             offsets.push(move_cursor(&mut cursor, &p));
@@ -942,7 +942,7 @@ impl<'a> From<&'a Polygon<i32>> for DrawingCommands {
         cmds.push(DrawingCommand::LineTo(offsets));
         cmds.push(DrawingCommand::ClosePath);
 
-        for int_ring in poly.interiors.iter() {
+        for int_ring in poly.interiors().iter() {
             cmds.push(DrawingCommand::MoveTo(vec![move_cursor(&mut cursor, &int_ring.0[0])]));
 
             let mut offsets = Vec::with_capacity(int_ring.0.len()-1);
@@ -974,11 +974,11 @@ impl<'a> From<&'a MultiPolygon<i32>> for DrawingCommands {
 
         for poly in mpoly.0 {
 
-            cmds.push(DrawingCommand::MoveTo(vec![move_cursor(&mut cursor, &poly.exterior.0[0])]));
+            cmds.push(DrawingCommand::MoveTo(vec![move_cursor(&mut cursor, &poly.exterior().0[0])]));
 
-            let mut offsets = Vec::with_capacity(poly.exterior.0.len()-1);
-            for (i, p) in poly.exterior.0.iter().enumerate() {
-                if i == 0 || i == poly.exterior.0.len() - 1 {
+            let mut offsets = Vec::with_capacity(poly.exterior().0.len()-1);
+            for (i, p) in poly.exterior().0.iter().enumerate() {
+                if i == 0 || i == poly.exterior().0.len() - 1 {
                     continue;
                 }
                 offsets.push(move_cursor(&mut cursor, &p));
@@ -987,7 +987,7 @@ impl<'a> From<&'a MultiPolygon<i32>> for DrawingCommands {
             cmds.push(DrawingCommand::LineTo(offsets));
             cmds.push(DrawingCommand::ClosePath);
 
-            for int_ring in poly.interiors.iter() {
+            for int_ring in poly.interiors().iter() {
                 cmds.push(DrawingCommand::MoveTo(vec![move_cursor(&mut cursor, &int_ring.0[0])]));
 
                 let mut offsets = Vec::with_capacity(int_ring.0.len()-1);
