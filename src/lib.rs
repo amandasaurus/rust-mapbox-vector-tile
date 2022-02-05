@@ -93,7 +93,7 @@ impl Feature {
         }
     }
 
-    pub fn translate_geometry(&mut self, x_func: &Fn(i32)->i32, y_func: &Fn(i32) -> i32) {
+    pub fn translate_geometry(&mut self, x_func: &dyn Fn(i32)->i32, y_func: &dyn Fn(i32) -> i32) {
         // FIXME why the back and forth and not just set it
         self.geometry = match self.geometry {
             Geometry::Point(mut p) => {
