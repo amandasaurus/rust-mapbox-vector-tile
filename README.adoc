@@ -1,4 +1,5 @@
 = mapbox_vector_tile : Read & Write MVT files
 
+https://codecov.io/gh/Fusselwurm/rust-mapbox-vector-tile/[image:https://codecov.io/gh/Fusselwurm/rust-mapbox-vector-tile/branch/master/graph/badge.svg[codecov]]
 
 Copyright under the GNU Affero GPL v3 (or later) (see the file link:LICENCE[LICENCE])
